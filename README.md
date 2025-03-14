@@ -1,6 +1,6 @@
 # Firmngin-Kit Library
 
-This library integrates payment systems directly into your IoT devices with simple and secure communication, opening new monetization opportunities for your system 💰.
+This library make easy flow payment systems to your IoT devices with simple and secure communication, opening new monetization opportunities for your system 💰.
 
 Check this out [kit.firmngin.cloud](https://kit.firmngin.cloud) for more information and try for free
 
