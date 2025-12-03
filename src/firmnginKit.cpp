@@ -206,9 +206,11 @@ void FirmnginKit::loop() {
     static unsigned long lastReconnectAttempt = 0;
     static unsigned long backoffDelay = 5000;
 
-    if (!_mqttClient.connected()) {
+    if (!_mqttClient.connected())
+    {
         unsigned long now = millis();
-        if (now - lastReconnectAttempt > backoffDelay) {
+        if (now - lastReconnectAttempt > backoffDelay)
+        {
             lastReconnectAttempt = now;
             backoffDelay = min(backoffDelay * 2, 60000UL);
             if (connectServer()) {
@@ -239,9 +241,11 @@ bool FirmnginKit::connectServer() {
     setupLWT();
     
     int retryCount = 0;
-    while (!_mqttClient.connected() && retryCount < maxRetryMQTT) {
+    while (!_mqttClient.connected() && retryCount < maxRetryMQTT)
+    {
         unsigned long now = millis();
-        if (now - _lastMQTTAttempt >= _delayRetryMQTT) {
+        if (now - _lastMQTTAttempt >= _delayRetryMQTT)
+        {
             _lastMQTTAttempt = now;
             Serial.print("connecting to Server (");
             Serial.print(retryCount + 1);
@@ -280,7 +284,7 @@ bool FirmnginKit::connectServer() {
         delay(1000);
         ESP.restart();
     }
-    
+
     return false;
 }
 
