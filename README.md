@@ -6,9 +6,9 @@ Visit [firmngin.dev](https://firmngin.dev) for more information and try it for f
 
 ## Features
 
-- ✅ ESP8266 and ESP32 support
-- ✅ Event-driven callback system
-- ✅ Simple state-based API
+- ESP8266 and ESP32 support
+- Event-driven callback system
+- Simple state-based API
 
 ## Installation
 
@@ -20,7 +20,7 @@ Visit [firmngin.dev](https://firmngin.dev) for more information and try it for f
 
 2. Download this library and place it in Arduino IDE `libraries` folder
 
-3. Create `keys.h` file in your sketch folder with the following format:
+3. Download `keys.h`  and put it in your sketch folder with main sketch files:
 
 ```cpp
 // keys.h
