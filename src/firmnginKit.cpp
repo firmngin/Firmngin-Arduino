@@ -1,7 +1,5 @@
 #include "firmnginKit.h"
 
-#define MQTT_TOPIC_PREFIX "fngin/"
-
 const char *NTP_SERVER = "pool.ntp.org";
 int GMT_OFFSET_SEC = 7 * 3600;
 int DAYLIGHT_OFFSET_SEC = 0;
@@ -52,7 +50,23 @@ FirmnginKit::FirmnginKit(const char *deviceId, const char *deviceKey, const char
       _mqttPort(MQTT_SERVER_PORT),
       _caCert(caCert),
       _clientCert(clientCert),
-      _privateKey(privateKey)
+      _privateKey(privateKey),
+      _fingerprint(nullptr)
+{
+}
+
+FirmnginKit::FirmnginKit(const char *deviceId, const char *deviceKey, const uint8_t* fingerprint, const char* clientCert, const char* privateKey)
+    : _deviceId(deviceId),
+      _deviceKey(deviceKey),
+      _debug(false),
+      _lastMQTTAttempt(0),
+      _mqttClient(_wifiClient),
+      _mqttServer(MQTT_SERVER_ADDR),
+      _mqttPort(MQTT_SERVER_PORT),
+      _caCert(nullptr),
+      _clientCert(clientCert),
+      _privateKey(privateKey),
+      _fingerprint(fingerprint)
 {
 }
 #else
@@ -74,16 +88,6 @@ FirmnginKit::~FirmnginKit() {
     delete _clientCertList;
     delete _clientPrivKey;
 #endif
-}
-
-// Example: setTopicCallback("dev-12345") returns "fngin/dev-12345/callback"
-String FirmnginKit::setTopicCallback(String deviceId) {
-    return String(MQTT_TOPIC_PREFIX) + deviceId + "/callback";
-}
-
-// Example: getData("dev-12345") returns "fngin/dev-12345/dt"
-String FirmnginKit::getData(String deviceId) {
-    return String(MQTT_TOPIC_PREFIX) + deviceId + "/dt";
 }
 
 // Example: getPaymentSuccess("dev-1764691334-daa58e77") returns "/c/dev-1764691334-daa58e77/pm"
@@ -129,17 +133,126 @@ void FirmnginKit::begin() {
     }
 
     syncTime();
+    
+    // Verify time is synced (critical for certificate validation)
+    time_t now = time(nullptr);
+    struct tm timeinfo;
+    if (localtime_r(&now, &timeinfo)) {
+        if (_debug) {
+            Serial.print("System time: ");
+            Serial.print(timeinfo.tm_year + 1900);
+            Serial.print("-");
+            Serial.print(timeinfo.tm_mon + 1);
+            Serial.print("-");
+            Serial.print(timeinfo.tm_mday);
+            Serial.print(" ");
+            Serial.print(timeinfo.tm_hour);
+            Serial.print(":");
+            Serial.print(timeinfo.tm_min);
+            Serial.print(":");
+            Serial.println(timeinfo.tm_sec);
+        }
+        // Check if time is reasonable (after 2020)
+        if (timeinfo.tm_year < 120) {
+            Serial.println("WARNING: System time may not be synced correctly!");
+        }
+    }
+    
+    if (_debug) {
+        Serial.print("MQTT Server: ");
+        Serial.print(_mqttServer);
+        Serial.print(":");
+        Serial.println(_mqttPort);
+    }
 
 #if defined(ESP8266)
+    Serial.println("Configuring TLS...");
+    
+    // Validate client certificate and private key
+    if (!_clientCert || strlen(_clientCert) < 50 || !_privateKey || strlen(_privateKey) < 50) {
+        Serial.println("ERROR: Client certificate and private key are required but empty or invalid");
+        return;
+    }
+    
+    // Validate certificate format
+    String clientCertStr = String(_clientCert);
+    String privateKeyStr = String(_privateKey);
+    if (clientCertStr.indexOf("-----BEGIN CERTIFICATE-----") == -1 ||
+        clientCertStr.indexOf("-----END CERTIFICATE-----") == -1) {
+        Serial.println("ERROR: Client certificate format invalid (missing BEGIN/END markers)");
+        return;
+    }
+    if (privateKeyStr.indexOf("-----BEGIN") == -1 ||
+        privateKeyStr.indexOf("-----END") == -1) {
+        Serial.println("ERROR: Private key format invalid (missing BEGIN/END markers)");
+        return;
+    }
+    
+    // Validate fingerprint
+    if (!_fingerprint) {
+        Serial.println("ERROR: Server fingerprint is required but empty or invalid");
+        return;
+    }
+    
     _clientCertList = new BearSSL::X509List(_clientCert);
     _clientPrivKey = new BearSSL::PrivateKey(_privateKey);
     _wifiClient.setClientRSACert(_clientCertList, _clientPrivKey);
     _wifiClient.setBufferSizes(512, 512);
     _wifiClient.setFingerprint(_fingerprint);
 #elif defined(ESP32)
-    _wifiClient.setCACert(_caCert);
-    _wifiClient.setCertificate(_clientCert);
-    _wifiClient.setPrivateKey(_privateKey);
+    Serial.println("Configuring TLS...");
+
+    // Configure Root CA for server verification
+    if (_caCert && strlen(_caCert) > 50) {
+        // Validate certificate format
+        String caCertStr = String(_caCert);
+        if (caCertStr.indexOf("-----BEGIN CERTIFICATE-----") == -1 ||
+            caCertStr.indexOf("-----END CERTIFICATE-----") == -1) {
+            Serial.println("ERROR: CA certificate format invalid (missing BEGIN/END markers)");
+            return;
+        }
+        _wifiClient.setCACert(_caCert);
+        if (_debug) {
+            Serial.println("Root CA certificate set for server verification");
+        }
+    } else if (_fingerprint) {
+        _wifiClient.setInsecure();
+    } else {
+        Serial.println("ERROR: Either CA certificate or fingerprint is required");
+        return;
+    }
+
+    // Configure client certificate and private key for mTLS
+    if (_clientCert && strlen(_clientCert) > 50 && _privateKey && strlen(_privateKey) > 50) {
+        // Validate certificate format
+        String clientCertStr = String(_clientCert);
+        String privateKeyStr = String(_privateKey);
+        if (clientCertStr.indexOf("-----BEGIN CERTIFICATE-----") == -1 ||
+            clientCertStr.indexOf("-----END CERTIFICATE-----") == -1) {
+            Serial.println("ERROR: Client certificate format invalid (missing BEGIN/END markers)");
+            return;
+        }
+        if (privateKeyStr.indexOf("-----BEGIN") == -1 ||
+            privateKeyStr.indexOf("-----END") == -1) {
+            Serial.println("ERROR: Private key format invalid (missing BEGIN/END markers)");
+            return;
+        }
+        // TODO: just for a while
+        _wifiClient.setInsecure();
+        _wifiClient.setCertificate(_clientCert);
+        _wifiClient.setPrivateKey(_privateKey);
+        if (_debug) {
+            Serial.println("Client certificate and private key set for TLS authentication");
+        }
+    } else {
+        Serial.println("ERROR: Client certificate and private key are required but empty or invalid");
+        return;
+    }
+
+    // Set TLS handshake timeout (30 seconds)
+    _wifiClient.setTimeout(30);
+
+    Serial.println("TLS configuration completed");
 #endif
 
     _mqttClient.setServer(_mqttServer.c_str(), _mqttPort);
@@ -170,13 +283,27 @@ void FirmnginKit::setDaylightOffsetSec(int daylightOffsetSec) {
 }
 
 void FirmnginKit::syncTime() {
+    if (_debug) {
+        Serial.print("Syncing time from NTP server: ");
+        Serial.println(NTP_SERVER);
+    }
+    
     configTime(GMT_OFFSET_SEC, DAYLIGHT_OFFSET_SEC, NTP_SERVER);
     time_t now = time(nullptr);
     int timeout = 0;
-    while (now < 8 * 3600 * 2 && timeout < 100) {
+    int maxWait = 20; // Wait up to 2 seconds (20 * 100ms)
+    
+    // Wait for time to be set (time should be > Jan 1, 2020)
+    while (now < 1577836800 && timeout < maxWait) {
         delay(100);
         now = time(nullptr);
         timeout++;
+    }
+    
+    if (now < 1577836800) {
+        Serial.println("WARNING: Time sync may have failed, certificate validation might fail!");
+    } else if (_debug) {
+        Serial.println("Time synchronized");
     }
 }
 
@@ -247,17 +374,23 @@ bool FirmnginKit::connectServer() {
         if (now - _lastMQTTAttempt >= _delayRetryMQTT)
         {
             _lastMQTTAttempt = now;
-            Serial.print("connecting to Server (");
-            Serial.print(retryCount + 1);
-            Serial.println(")");
-
+            if (_debug) {
+                Serial.print("connecting to Server (");
+                Serial.print(retryCount + 1);
+                Serial.println(")");
+            }
             String willTopic = "device/" + String(_deviceId) + "/status";
             String willMessage = "{\"device_id\":\"" + String(_deviceId) + "\",\"status\":\"offline\"}";
+            
+            if (_debug) {
+                Serial.print("Attempting connection to server");
+                Serial.print(" with ");
+                Serial.println(_deviceId);
+            }
             
             bool connected = _mqttClient.connect(_deviceId, willTopic.c_str(), 1, true, willMessage.c_str());
 
             if (connected) {
-                _mqttClient.subscribe(getData(_deviceId).c_str(), defaultQos);
                 _mqttClient.subscribe(getPaymentSuccess(_deviceId).c_str(), defaultQos);
                 _mqttClient.subscribe(getDeviceStatus(_deviceId).c_str(), defaultQos);
                 _mqttClient.subscribe(getPaymentPending(_deviceId).c_str(), defaultQos);
@@ -268,12 +401,35 @@ bool FirmnginKit::connectServer() {
                 String onlineMsg = "{\"device_id\":\"" + String(_deviceId) + "\",\"status\":\"online\"}";
                 _mqttClient.publish(willTopic.c_str(), onlineMsg.c_str(), true);
                 if (_debug) {
-                    Serial.println("conneted with firmngin.dev");
+                    Serial.println("Connected to firmngin.dev");
                 }
+                Serial.println("Ready...");
                 return true;
             } else {
+                int mqttState = _mqttClient.state();
                 Serial.print("Connection failed, rc=");
-                Serial.println(_mqttClient.state());
+                Serial.print(mqttState);
+
+                if (_debug) {
+                    Serial.print(" (");
+                    switch(mqttState) {
+                        case -4: Serial.print("MQTT_CONNECTION_TIMEOUT"); break;
+                        case -3: Serial.print("MQTT_CONNECTION_LOST"); break;
+                        case -2: {
+                            Serial.print("MQTT_CONNECT_FAILED - TLS/certificate error");
+                            break;
+                        }
+                        case -1: Serial.print("MQTT_DISCONNECTED"); break;
+                        case 1: Serial.print("MQTT_CONNECT_BAD_PROTOCOL"); break;
+                        case 2: Serial.print("MQTT_CONNECT_BAD_CLIENT_ID"); break;
+                        case 3: Serial.print("MQTT_CONNECT_UNAVAILABLE"); break;
+                        case 4: Serial.print("MQTT_CONNECT_BAD_CREDENTIALS"); break;
+                        case 5: Serial.print("MQTT_CONNECT_UNAUTHORIZED"); break;
+                        default: Serial.print("UNKNOWN"); break;
+                    }
+                    Serial.print(")");
+                }
+                Serial.println();
                 retryCount++;
             }
         }
@@ -322,7 +478,7 @@ void FirmnginKit::mqttCallback(char *topic, byte *payload, unsigned int length) 
 }
 
 FirmnginKit &FirmnginKit::endSession() {
-    String topic = MQTT_TOPIC_PREFIX;
+    String topic = "fngin/";
     topic += _deviceId;
 
     if (_mqttClient.connected()) {

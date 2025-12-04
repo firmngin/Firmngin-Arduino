@@ -77,6 +77,7 @@ public:
     FirmnginKit(const char *deviceId, const char *deviceKey, const char* clientCert, const char* privateKey, const uint8_t* fingerprint);
 #elif defined(ESP32)
     FirmnginKit(const char *deviceId, const char *deviceKey, const char* caCert, const char* clientCert, const char* privateKey);
+    FirmnginKit(const char *deviceId, const char *deviceKey, const uint8_t* fingerprint, const char* clientCert, const char* privateKey);
 #else
     FirmnginKit(const char *deviceId, const char *deviceKey);
 #endif
@@ -129,6 +130,7 @@ private:
     const char* _caCert = nullptr;
     const char* _clientCert = nullptr;
     const char* _privateKey = nullptr;
+    const uint8_t* _fingerprint = nullptr;
 #endif
 
     std::map<String, StateCallbackFunction> _stateCallbacks;
@@ -137,8 +139,6 @@ private:
     void _Debug(String message, bool newLine = true);
     bool connectServer();
     void mqttCallback(char *topic, byte *payload, unsigned int length);
-    String setTopicCallback(String deviceId);
-    String getData(String deviceId);
     String getPaymentSuccess(String deviceId);
     String getDeviceStatus(String deviceId);
     String getPaymentPending(String deviceId);

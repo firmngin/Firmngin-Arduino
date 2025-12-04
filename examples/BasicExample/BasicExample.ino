@@ -25,7 +25,15 @@ const char *password = "YOUR_PASSWORD";
 #if defined(ESP8266)
 FirmnginKit fngin(DEVICE_ID, DEVICE_KEY, CLIENT_CERT, PRIVATE_KEY, SERVER_FINGERPRINT_BYTES);
 #elif defined(ESP32)
-FirmnginKit fngin(DEVICE_ID, DEVICE_KEY, CA_CERT, CLIENT_CERT, PRIVATE_KEY);
+// Choose one of these options:
+// Option 1: CA Certificate verification (recommended for production)
+// FirmnginKit fngin(DEVICE_ID, DEVICE_KEY, CA_CERT, CLIENT_CERT, PRIVATE_KEY);
+
+// Option 2: Fingerprint verification (ESP8266-style, limited support on ESP32)
+// FirmnginKit fngin(DEVICE_ID, DEVICE_KEY, SERVER_FINGERPRINT_BYTES, CLIENT_CERT, PRIVATE_KEY);
+
+// For now, using fingerprint option since CA certificate is causing issues
+FirmnginKit fngin(DEVICE_ID, DEVICE_KEY, SERVER_FINGERPRINT_BYTES, CLIENT_CERT, PRIVATE_KEY);
 #endif
 
 void setupStates()
@@ -89,7 +97,7 @@ void setup()
 
   // Enable debug output
   fngin.setDebug(true);
-  
+
   // Set timezone (GMT+7 for Indonesia)
   fngin.setTimezone(7);
   
