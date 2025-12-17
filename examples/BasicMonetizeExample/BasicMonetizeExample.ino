@@ -2,7 +2,7 @@
  * FirmnginKit Basic Example
  * 
  * website: https://firmngin.dev
- * author: Firmngin.dev
+ * author: (Arif) Firmngin.dev
  */
 
 #include "keys.h" 
@@ -39,38 +39,38 @@ FirmnginKit fngin(DEVICE_ID, DEVICE_KEY, SERVER_FINGERPRINT_BYTES, CLIENT_CERT, 
 void setupStates()
 {
   // Payment success handler
-  fngin.onState(PAYMENT_SUCCESS, [](DeviceState state) {
+  fngin.onStateMonetize(PAYMENT_SUCCESS, [](DeviceState state) {
     Serial.println("Payment success received");
     String payload = state.getPayload();
     Serial.println(payload);
   });
 
   // Device status handler
-  fngin.onState(DEVICE_STATUS, [](DeviceState state) {
+  fngin.onStateMonetize(DEVICE_STATUS, [](DeviceState state) {
     Serial.println("Device status received");
     Serial.println(state.getPayload());
   });
 
   // Payment pending handler
-  fngin.onState(PAYMENT_PENDING, [](DeviceState state) {
+  fngin.onStateMonetize(PAYMENT_PENDING, [](DeviceState state) {
     Serial.println("Payment pending received");
     Serial.println(state.getPayload());
   });
 
   // On pending payments handler
-  fngin.onState(CUSTOM_ON_PENDING_PAYMENTS, [](DeviceState state) {
+  fngin.onStateMonetize(CUSTOM_ON_PENDING_PAYMENTS, [](DeviceState state) {
     Serial.println("On pending payments received");
     Serial.println(state.getPayload());
   });
 
   // On expired payments handler
-  fngin.onState(CUSTOM_ON_EXPIRED_PAYMENTS, [](DeviceState state) {
+  fngin.onStateMonetize(CUSTOM_ON_EXPIRED_PAYMENTS, [](DeviceState state) {
     Serial.println("On expired payments received");
     Serial.println(state.getPayload());
   });
 
   // On success payments handler
-  fngin.onState(CUSTOM_ON_SUCCESS_PAYMENTS, [](DeviceState state) {
+  fngin.onStateMonetize(CUSTOM_ON_SUCCESS_PAYMENTS, [](DeviceState state) {
     Serial.println("On success payments received");
     Serial.println(state.getPayload());
   });

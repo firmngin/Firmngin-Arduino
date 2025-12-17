@@ -1,5 +1,7 @@
 #include "firmnginKit.h"
 
+FirmnginKit* _globalFirmnginKitInstance = nullptr;
+
 const char *NTP_SERVER = "pool.ntp.org";
 int GMT_OFFSET_SEC = 7 * 3600;
 int DAYLIGHT_OFFSET_SEC = 0;
@@ -38,6 +40,7 @@ FirmnginKit::FirmnginKit(const char *deviceId, const char *deviceKey, const char
       _privateKey(privateKey),
       _fingerprint(fingerprint)
 {
+    _globalFirmnginKitInstance = this;
 }
 #elif defined(ESP32)
 FirmnginKit::FirmnginKit(const char *deviceId, const char *deviceKey, const char* caCert, const char* clientCert, const char* privateKey)
@@ -53,6 +56,7 @@ FirmnginKit::FirmnginKit(const char *deviceId, const char *deviceKey, const char
       _privateKey(privateKey),
       _fingerprint(nullptr)
 {
+    _globalFirmnginKitInstance = this;
 }
 
 FirmnginKit::FirmnginKit(const char *deviceId, const char *deviceKey, const uint8_t* fingerprint, const char* clientCert, const char* privateKey)
@@ -68,6 +72,7 @@ FirmnginKit::FirmnginKit(const char *deviceId, const char *deviceKey, const uint
       _privateKey(privateKey),
       _fingerprint(fingerprint)
 {
+    _globalFirmnginKitInstance = this;
 }
 #else
 FirmnginKit::FirmnginKit(const char *deviceId, const char *deviceKey)
@@ -118,6 +123,22 @@ String FirmnginKit::getPmOnExpired(String deviceId) {
 // Example: getPmOnSuccess("dev-1764691334-daa58e77") returns "/c/dev-1764691334-daa58e77/mos"
 String FirmnginKit::getPmOnSuccess(String deviceId) {
     return String("/c/") + deviceId + "/" + T_PM_ON_SUCCESS;
+}
+
+String FirmnginKit::getDownstreamTopic(String deviceId) {
+    return String("/d/") + deviceId + "/rs/+";
+}
+
+String FirmnginKit::getVirtualPinTopic(String deviceId, int vpin) {
+    return String("/d/") + deviceId + "/rs/" + String(vpin);
+}
+
+String FirmnginKit::getPushStateTopic(String deviceId) {
+    return String("/d/") + deviceId + "/ps";
+}
+
+String FirmnginKit::getPushBatchStateTopic(String deviceId) {
+    return String("/d/") + deviceId + "/psb";
 }
 
 void FirmnginKit::begin() {
@@ -260,13 +281,18 @@ void FirmnginKit::begin() {
         this->mqttCallback(topic, payload, length);
     });
     _mqttClient.setBufferSize(2048);
-    _mqttClient.setKeepAlive(30);
-    _mqttClient.setSocketTimeout(10);
+    _mqttClient.setKeepAlive(15);
+    _mqttClient.setSocketTimeout(20);
 }
 
 void FirmnginKit::setMQTTServer(const char* server, int port) {
     _mqttServer = server;
     _mqttPort = port;
+}
+
+void FirmnginKit::setClient(Client& client) {
+    _externalClient = &client;
+    _mqttClient.setClient(client);
 }
 
 void FirmnginKit::setTimezone(int timezone) {
@@ -307,11 +333,7 @@ void FirmnginKit::syncTime() {
     }
 }
 
-void FirmnginKit::onState(const char* state, StateCallbackFunction callback) {
-    _stateCallbacks[String(state)] = callback;
-}
-
-void FirmnginKit::onState(DeviceStateType state, StateCallbackFunction callback) {
+void FirmnginKit::onStateMonetize(DeviceStateType state, StateCallbackFunction callback) {
     _stateCallbacks[String(STATE_NAMES[state])] = callback;
 }
 
@@ -323,8 +345,104 @@ void FirmnginKit::onCommand(DeviceStateType command, StateCallbackFunction callb
     _commandCallbacks[String(STATE_NAMES[command])] = callback;
 }
 
+void FirmnginKit::onVirtualPin(int pinId, VirtualPinCallbackFunction callback) {
+    _virtualPinCallbacks[pinId] = callback;
+}
+
+void FirmnginKit::registerVirtualPin(int pinId, VirtualPinCallbackFunction callback) {
+    _virtualPinCallbacks[pinId] = callback;
+}
+
+void onVirtualPin(int pinId, VirtualPinCallbackFunction callback) {
+    if (_globalFirmnginKitInstance) {
+        _globalFirmnginKitInstance->onVirtualPin(pinId, callback);
+    }
+}
+
+void FirmnginKit::pushState(String key, String value) {
+    if (!_mqttClient.connected()) {
+        if (_debug) {
+            Serial.println("Cannot push state: MQTT not connected");
+        }
+        return;
+    }
+
+    String topic = getPushStateTopic(_deviceId);
+#if ARDUINOJSON_VERSION_MAJOR >= 7
+    JsonDocument doc;
+#else
+    DynamicJsonDocument doc(512);
+#endif
+    doc["key"] = key;
+    doc["value"] = value;
+    
+    String payload;
+    serializeJson(doc, payload);
+    
+    bool published = _mqttClient.publish(topic.c_str(), payload.c_str());
+    
+    if (_debug) {
+        if (!published) {
+            Serial.print("Failed to push state: ");
+            Serial.print(key);
+            Serial.print(" = ");
+            Serial.print(value);
+            Serial.println();
+        }
+    }
+}
+
+void FirmnginKit::pushState(int key, String value) {
+    pushState(String(key), value);
+}
+
+void FirmnginKit::pushState(String key, int value) {
+    pushState(key, String(value));
+}
+
+void FirmnginKit::pushState(int key, int value) {
+    pushState(String(key), String(value));
+}
+
+void FirmnginKit::pushState(String key, float value) {
+    pushState(key, String(value));
+}
+
+void FirmnginKit::pushState(int key, float value) {
+    pushState(String(key), String(value));
+}
+
+void FirmnginKit::pushState(String key, double value) {
+    pushState(key, String(value));
+}
+
+void FirmnginKit::pushState(int key, double value) {
+    pushState(String(key), String(value));
+}
+
+bool FirmnginKit::publishBatchState(String payload) {
+    if (!_mqttClient.connected()) {
+        return false;
+    }
+
+    String topic = getPushBatchStateTopic(_deviceId);
+    bool published = _mqttClient.publish(topic.c_str(), payload.c_str());
+    
+    if (_debug) {
+        if (!published) {
+            Serial.print("Failed to push batch state: ");
+            Serial.println(payload);
+        }
+    }
+    return published;
+}
+
+BatchState FirmnginKit::pushBatchState() {
+    return BatchState();
+}
+
 void FirmnginKit::setupLWT() {
-    String willTopic = "device/" + String(_deviceId) + "/status";
+    String willTopic = "/d/" + String(_deviceId) + "/lwt";
 }
 
 void FirmnginKit::loop() {
@@ -379,8 +497,8 @@ bool FirmnginKit::connectServer() {
                 Serial.print(retryCount + 1);
                 Serial.println(")");
             }
-            String willTopic = "device/" + String(_deviceId) + "/status";
-            String willMessage = "{\"device_id\":\"" + String(_deviceId) + "\",\"status\":\"offline\"}";
+            String willTopic = "/d/" + String(_deviceId) + "/lwt";
+            String willMessage = "0";
             
             if (_debug) {
                 Serial.print("Attempting connection to server");
@@ -388,6 +506,7 @@ bool FirmnginKit::connectServer() {
                 Serial.println(_deviceId);
             }
             
+            _mqttClient.disconnect();
             bool connected = _mqttClient.connect(_deviceId, willTopic.c_str(), 1, true, willMessage.c_str());
 
             if (connected) {
@@ -397,9 +516,12 @@ bool FirmnginKit::connectServer() {
                 _mqttClient.subscribe(getPmOnPayment(_deviceId).c_str(), defaultQos);
                 _mqttClient.subscribe(getPmOnExpired(_deviceId).c_str(), defaultQos);
                 _mqttClient.subscribe(getPmOnSuccess(_deviceId).c_str(), defaultQos);
+                _mqttClient.subscribe(getDownstreamTopic(_deviceId).c_str(), defaultQos);
 
-                String onlineMsg = "{\"device_id\":\"" + String(_deviceId) + "\",\"status\":\"online\"}";
-                _mqttClient.publish(willTopic.c_str(), onlineMsg.c_str(), true);
+                _mqttClient.publish(willTopic.c_str(), "", true);
+                delay(10);
+                
+                _mqttClient.publish(willTopic.c_str(), "1", true);
                 if (_debug) {
                     Serial.println("Connected to firmngin.dev");
                 }
@@ -451,14 +573,30 @@ void FirmnginKit::mqttCallback(char *topic, byte *payload, unsigned int length) 
         payloadStr += (char)payload[i];
     }
 
-    if (_debug) {
-        Serial.print("[");
-        Serial.print(topic);
-        Serial.print("]: ");
-        Serial.println(payloadStr);
+    String topicStr = String(topic);
+    String expectedPrefix = String("/d/") + String(_deviceId) + "/rs/";
+    
+    // Check if topic matches pattern: /d/{deviceId}/rs/{vpin}
+    if (topicStr.startsWith(expectedPrefix)) {
+        // Extract VPIN ID from topic: /d/{deviceId}/rs/{vpin}
+        String vpinStr = topicStr.substring(expectedPrefix.length());
+        int vpinId = vpinStr.toInt();
+        
+        if (vpinId > 0) {
+            if (_virtualPinCallbacks.count(vpinId) > 0) {
+                // Payload is directly a string, pass it to handler
+                _virtualPinCallbacks[vpinId](payloadStr);
+            } else if (_debug) {
+                Serial.print("No handler registered for virtual pin: ");
+                Serial.println(vpinId);
+            }
+        } else if (_debug) {
+            Serial.print("Invalid virtual pin ID in topic: ");
+            Serial.println(topicStr);
+        }
+        return;
     }
 
-    String topicStr = String(topic);
     String stateType = "";
     
     int lastSlash = topicStr.lastIndexOf('/');
@@ -482,7 +620,11 @@ FirmnginKit &FirmnginKit::endSession() {
     topic += _deviceId;
 
     if (_mqttClient.connected()) {
+#if ARDUINOJSON_VERSION_MAJOR >= 7
+        JsonDocument doc;
+#else
         DynamicJsonDocument doc(256);
+#endif
         doc["state"] = "end_session";
         String payload;
         serializeJson(doc, payload);
