@@ -131,7 +131,6 @@ private:
     unsigned long _lastMQTTAttempt;
     unsigned long _lastHeartbeat;
     const unsigned long _heartbeatInterval = 20000;
-    const char *BASE_URL = "https://apikit.firmngin.cloud";
 
 #if defined(ESP8266) || defined(ESP32)
     WiFiClientSecure _wifiClient;
