@@ -129,8 +129,6 @@ private:
     const char *_deviceKey;
     bool _debug;
     unsigned long _lastMQTTAttempt;
-    unsigned long _lastHeartbeat;
-    const unsigned long _heartbeatInterval = 20000;
 
 #if defined(ESP8266) || defined(ESP32)
     WiFiClientSecure _wifiClient;
