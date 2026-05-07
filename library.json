@@ -1,0 +1,23 @@
+{
+    "name": "firmnginKit",
+    "version": "0.0.6",
+    "description": "IoT Library for Firmngin Platform with mTLS support",
+    "keywords": ["iot", "mqtt", "esp8266", "esp32", "firmngin"],
+    "repository": {
+        "type": "git",
+        "url": "https://github.com/firmngin/firmnginKit.git"
+    },
+    "authors": [
+        {
+            "name": "Firmngin",
+            "email": "dev@firmngin.dev"
+        }
+    ],
+    "license": "MIT",
+    "frameworks": ["arduino"],
+    "platforms": ["espressif8266", "espressif32"],
+    "dependencies": {
+        "bblanchon/ArduinoJson": "^6.21.3",
+        "knolleary/PubSubClient": "^2.8.0"
+    }
+}

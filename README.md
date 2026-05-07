@@ -1,29 +1,115 @@
-# Firmngin-Kit Library
+# FirmnginKit Library
 
-A powerful and easy-to-use library that seamlessly integrates your ESP8266/ESP32 IoT devices into the Firmngin Platform, enabling real-time device management, remote control, and secure payment processing capabilities. Built with secure communication, this library provides a simple event-driven API that handles all the complexity of device connectivity, allowing you to focus on building amazing IoT applications 💰.
+IoT Library for the Firmngin Platform. Enables ESP8266/ESP32 devices to accept payments, receive commands, and communicate securely over MQTT with mTLS support.
 
-Visit [firmngin.dev](https://firmngin.dev) for more information and try it for free.
+Check out [firmngin.dev](https://firmngin.dev) for more information.
 
 ## Features
 
-- ESP8266 and ESP32 support
-- Event-driven callback system
-- Simple state-based API
+- **ESP8266 & ESP32** support
+- **Auto reconnect** to MQTT broker with exponential backoff
+- **Event-driven API** using `onState()` and `onCommand()` callbacks
+- **mTLS authentication** via `keys.h` (optional but recommended)
+- **Shortened JSON keys** to minimize payload size
 
 ## Installation
 
+### PlatformIO
+
+Add to your `platformio.ini`:
+
+```ini
+lib_deps =
+    bblanchon/ArduinoJson @ ^6.21.3
+    knolleary/PubSubClient @ ^2.8.0
+```
+
+> We use these excellent 3rd party libraries to power FirmnginKit. Make sure they are installed in your project.
+
+Copy `src/firmnginKit.h` and `src/firmnginKit.cpp` to your project.
+
 ### Arduino IDE
 
-1. Install required libraries via Library Manager:
-   - ArduinoJson
-   - PubSubClient
+1. Install dependencies via Library Manager:
+   - **ArduinoJson** by Benoit Blanchon
+   - **PubSubClient** by Nick O'Leary
+2. Copy `firmnginKit.h`, `firmnginKit.cpp`, and `keys.h` (see below) to your sketch folder.
 
-2. Download this library and place it in Arduino IDE `libraries` folder
-
-3. Download `keys.h`  and put it in your sketch folder with main sketch files:
+## Quick Start
 
 ```cpp
-// keys.h
+#include <Arduino.h>
+#include "firmnginKit.h"
+#include <ArduinoJson.h>
+
+#if defined(ESP8266)
+#include <ESP8266WiFi.h>
+#elif defined(ESP32)
+#include <WiFi.h>
+#endif
+
+#define DEVICE_ID "FNG_YOUR_DEVICE_ID"
+#define DEVICE_KEY "FNG_YOUR_DEVICE_KEY"
+
+const char *ssid = "YOUR_SSID";
+const char *password = "YOUR_PASSWORD";
+
+FirmnginKit fngin(DEVICE_ID, DEVICE_KEY);
+
+void setup() {
+  Serial.begin(115200);
+
+  // Connect to WiFi
+  WiFi.begin(ssid, password);
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+  Serial.println("\nWiFi connected");
+
+  // Register state handlers BEFORE begin()
+  fngin.onState(PAYMENT, [](DeviceState state) {
+    String payload = state.getPayload();
+    DynamicJsonDocument doc(1024);
+    deserializeJson(doc, payload);
+
+    Serial.print("Item: ");      Serial.println(doc["it"].as<String>());
+    Serial.print("Price: ");     Serial.println(doc["pc"].as<String>());
+    Serial.print("Order ID: ");  Serial.println(doc["oid"].as<String>());
+  });
+
+  fngin.onState(DEVICE_STATUS, [](DeviceState state) {
+    DynamicJsonDocument doc(256);
+    deserializeJson(doc, state.getPayload());
+    Serial.print("New state: ");
+    Serial.println(doc["s"].as<String>());
+  });
+
+  fngin.setDebug(true);
+  fngin.setTimezone(7);          // GMT+7 (Indonesia)
+  fngin.begin();
+}
+
+void loop() {
+  fngin.loop();
+}
+```
+
+## mTLS Setup (`keys.h`)
+
+Create a `keys.h` file next to your sketch (do **not** commit this file).
+
+You can download your device's `keys.h` directly from the **Firmngin Dashboard** → Devices → your device → Download `keys.h`.
+
+If you prefer to create it manually, use the following template:
+
+```cpp
+#ifndef KEYS_H
+#define KEYS_H
+
+static const char* mqtt_server = "asia-jkt1.firmngin.dev";
+static const int mqtt_port = 8883;
+
 static const char CA_CERT[] PROGMEM = R"EOF(
 -----BEGIN CERTIFICATE-----
 [Your CA Certificate]
@@ -46,168 +132,172 @@ static const uint8_t SERVER_FINGERPRINT_BYTES[20] PROGMEM = {
   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
 };
+
+#endif
 ```
 
-## Basic Usage
+A template is available in `src/keys.h.template`.
+
+## Available States
+
+Register handlers using the enum constants:
+
+| Enum                  | Description                             |
+| --------------------- | --------------------------------------- |
+| `PAYMENT`             | Payment Section State                   |
+| `DEVICE_STATUS`       | Device entities state changed           |
+| `PENDING_PAYMENT`     | Invoice created, waiting for payment    |
+| `METADATA_ON_PENDING` | Custom metadata for pending payments    |
+| `METADATA_ON_EXPIRED` | Custom metadata for expired payments    |
+| `METADATA_ON_SUCCESS` | Custom metadata for successful payments |
+| `INIT`                | Initial configuration after connection  |
+| `DISPLAY_PIN`         | Show a PIN on the device screen         |
+| `VERIFICATION_RESULT` | PIN or precondition check result        |
+| `MENU_ITEMS`          | List of available services/products     |
+| `USAGE_RESPONSE`      | Current MQTT usage and quota            |
+| `LIMIT_EXCEEDED`      | Quota limit reached                     |
+| `NEAR_LIMIT`          | Approaching quota limit                 |
+
+You can also use raw topic suffix strings if needed:
 
 ```cpp
-#include "keys.h"          // Your certificate file
-#include "firmnginKit.h"
-#include <ArduinoJson.h>
+fngin.onState("pm", [](DeviceState state) { /* ... */ });
+```
 
-#define DEVICE_ID "YOUR_DEVICE_ID"
-#define DEVICE_KEY "YOUR_DEVICE_KEY"
+## JSON Payload Keys (Backend → Device)
 
-// ESP8266
-FirmnginKit fngin(DEVICE_ID, DEVICE_KEY, CLIENT_CERT, PRIVATE_KEY, SERVER_FINGERPRINT_BYTES);
+All JSON keys sent by the backend are **max 3 characters** to minimize payload size:
 
-// ESP32
-// FirmnginKit fngin(DEVICE_ID, DEVICE_KEY, CA_CERT, CLIENT_CERT, PRIVATE_KEY);
+### Payment (`pm`) / Pending Payment (`pp`)¡
 
-void setup() {
-  Serial.begin(115200);
-  
-  // Connect WiFi first
-  WiFi.begin("SSID", "PASSWORD");
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
-    Serial.print(".");
+```json
+{ "it": "Cappuccino", "pc": "45000", "oid": "ODR-260506-12345678" }
+```
+
+- `it` — item title
+- `pc` — price
+- `oid` — order ID
+
+### Device State (`ds`)
+
+```json
+{ "s": "idle" }
+```
+
+- `s` — state string
+
+### Display PIN (`dpin`)
+
+```json
+{
+  "t": "pin_display",
+  "pi": "123456",
+  "si": "abc...",
+  "ttl": 60,
+  "ea": "2026-05-05T10:01:00Z"
+}
+```
+
+- `t` — type
+- `pi` — PIN code
+- `si` — session ID
+- `ttl` — validity in seconds
+- `ea` — expires at (ISO-8601)
+
+### Verification Result (`vr`)
+
+```json
+{ "pn": true, "pr": false }
+```
+
+- `pn` — PIN met
+- `pr` — precondition met
+
+### Init (`init`)
+
+```json
+{ "e": [{ "p": 1, "v": "0" }], "m": "idle", "vf": 0 }
+```
+
+- `e` — entities array (`p` = pin, `v` = value)
+- `m` — merchant status
+- `vf` — verification flag (0-3)
+
+### Menu Items (`mi`)
+
+```json
+[
+  {
+    "id": "uuid",
+    "tl": "Title",
+    "d": "Desc",
+    "pr": "5000",
+    "sku": "SKU",
+    "pt": "single"
   }
-  
-  // Setup handler for any event
-  fngin.onState(PAYMENT_SUCCESS, [](DeviceState state) {
-    String payload = state.getPayload();
-    Serial.println("Payment received!");
-    Serial.println(payload);
-    
-    // Parse JSON with ArduinoJson
-    DynamicJsonDocument doc(1024);
-    deserializeJson(doc, payload);
-    
-    if (doc.containsKey("amount")) {
-      int amount = doc["amount"];
-      Serial.print("Amount: ");
-      Serial.println(amount);
-    }
-  });
-  
+]
+```
 
-  fngin.onState(DEVICE_STATUS, [](DeviceState state) {
-    Serial.println("Device status requested");
-    Serial.println(state.getPayload());
-  });
-  
-  fngin.onState(PAYMENT_PENDING, [](DeviceState state) {
-    Serial.println("Payment pending");
-    Serial.println(state.getPayload());
-  });
-  
-  fngin.onState(CUSTOM_ON_PENDING_PAYMENTS, [](DeviceState state) {
-    Serial.println("On pending payments");
-    Serial.println(state.getPayload());
-  });
-  
-  fngin.onState(CUSTOM_ON_EXPIRED_PAYMENTS, [](DeviceState state) {
-    Serial.println("On expired payments");
-    Serial.println(state.getPayload());
-  });
-  
-  fngin.onState(CUSTOM_ON_SUCCESS_PAYMENTS, [](DeviceState state) {
-    Serial.println("On success payments");
-    Serial.println(state.getPayload());
-  });
-  
-  fngin.setDebug(false);        // Enable debug output
-  fngin.setTimezone(7);        // Set timezone (GMT+7 for Indonesia)
-  
-  fngin.begin();
-}
+### Usage / Limit (`ur`, `le`, `nl`)
 
-void loop() {
-  fngin.loop();  // Must be called continuously
+```json
+{
+  "u": 1250,
+  "l": 30000,
+  "r": 28750,
+  "pct": 4,
+  "ra": "2026-05-06T00:00:00Z",
+  "g": "day"
 }
 ```
 
-## Main Functions
+- `u` — used
+- `l` — limit
+- `r` — remaining
+- `pct` — percentage
+- `ra` — reset at
+- `g` — granularity
 
-### Constructor
+## Last Will and Testament (LWT)
 
-```cpp
-// ESP8266
-FirmnginKit fngin(deviceId, deviceKey, clientCert, privateKey, fingerprint);
+Automatically configured on `begin()`:
 
-// ESP32
-FirmnginKit fngin(deviceId, deviceKey, caCert, clientCert, privateKey);
+- **Topic**: `/d/{device_id}/lwt`
+- **Offline payload**: `"0"`
+- **Online payload**: `"1"` (published on connect)
+- **QoS**: 1, **Retain**: true
+
+## Development Workflow
+
+```bash
+# Edit library in src/
+# Sync to example
+python3 sync_lib.py
+
+# Build example
+pio run -e esp32dev
 ```
 
-### Setup & Loop
-
-- `fngin.begin()` - Start connection to server (call after WiFi connected)
-- `fngin.loop()` - Must be called continuously in `loop()`
-
-### Event Handlers
-
-- `fngin.onState(PAYMENT_SUCCESS, callback)` - Handler for payment success
-- `fngin.onState(DEVICE_STATUS, callback)` - Handler for device status request
-- `fngin.onState(PAYMENT_PENDING, callback)` - Handler for payment pending
-- `fngin.onState(CUSTOM_ON_PENDING_PAYMENTS, callback)` - Handler for pending payments
-- `fngin.onState(CUSTOM_ON_EXPIRED_PAYMENTS, callback)` - Handler for expired payments
-- `fngin.onState(CUSTOM_ON_SUCCESS_PAYMENTS, callback)` - Handler for success payments
-
-### Configuration
-
-- `fngin.setDebug(true/false)` - Enable/disable debug output
-- `fngin.setTimezone(7)` - Set timezone (default: +7 for Indonesia)
-- `fngin.setNtpServer("pool.ntp.org")` - Set NTP server
-- `fngin.setMQTTServer("server.com", 8883)` - Set custom MQTT server
-
-## Event Types
-
-The library provides easy-to-read enums:
-
-| Enum | Description |
-|------|-------------|
-| `PAYMENT_SUCCESS` | Payment successfully received |
-| `DEVICE_STATUS` | Device status request |
-| `PAYMENT_PENDING` | Payment is pending |
-| `CUSTOM_ON_PENDING_PAYMENTS` | Your data when pending payments event |
-| `CUSTOM_ON_EXPIRED_PAYMENTS` | Your data when expired payments event |
-| `CUSTOM_ON_SUCCESS_PAYMENTS` | Your data when success payments event |
-
-## Accessing Data
-
-All data is returned as JSON string. Use ArduinoJson for parsing:
+## API Reference
 
 ```cpp
-fngin.onState(PAYMENT_SUCCESS, [](DeviceState state) {
-  String payload = state.getPayload();
-  
-  DynamicJsonDocument doc(1024);
-  deserializeJson(doc, payload);
-  
-  // Access fields
-  String refId = doc["reference_id"];
-  int amount = doc["amount"];
-  int sessionId = doc["active_session_id"];
-});
+FirmnginKit(const char* deviceId, const char* deviceKey);
+
+void begin();
+void loop();
+void setDebug(bool debug);
+void setTimezone(int timezone);          // -12 to 12
+void setDaylightOffsetSec(int offset);
+void setNtpServer(const char* server);
+void setMQTTServer(const char* server, int port);
+bool isPlatformSupported();
+
+void onState(const char* state, StateCallbackFunction callback);
+void onState(DeviceStateType state, StateCallbackFunction callback);
+void onCommand(const char* command, StateCallbackFunction callback);
+void onCommand(DeviceStateType command, StateCallbackFunction callback);
 ```
-
-## Troubleshooting
-
-1. **Ensure WiFi is connected** before calling `begin()`
-2. **Ensure `keys.h` file exists** in sketch folder with valid certificates
-3. **Enable debug mode** to see detailed logs: `fngin.setDebug(true)`
-4. **Restart device** if connection issues occur
-5. **Check Serial Monitor** to see error messages
-
-## Complete Example
-
-See `examples/BasicExample/` folder for complete library usage example.
 
 ## License
 
 MIT License
-
-## Support
-
-Visit [firmngin.dev](https://firmngin.dev) for complete documentation and support.
