@@ -42,8 +42,8 @@ String FirmnginKit::getTopicDeviceStatus(String deviceId) {
     return String("/c/") + deviceId + "/" + TOPIC_DEVICE_STATUS;
 }
 
-String FirmnginKit::getTopicPendingPayment(String deviceId) {
-    return String("/c/") + deviceId + "/" + TOPIC_PENDING_PAYMENT;
+String FirmnginKit::getTopicPaymentProcess(String deviceId) {
+    return String("/c/") + deviceId + "/" + TOPIC_PAYMENT_PROCESS;
 }
 
 String FirmnginKit::getTopicMachineOperation(String deviceId) {
@@ -236,7 +236,7 @@ bool FirmnginKit::connectServer() {
             if (connected) {
                 _mqttClient.subscribe(getTopicPayment(_deviceId).c_str(), defaultQos);
                 _mqttClient.subscribe(getTopicDeviceStatus(_deviceId).c_str(), defaultQos);
-                _mqttClient.subscribe(getTopicPendingPayment(_deviceId).c_str(), defaultQos);
+                _mqttClient.subscribe(getTopicPaymentProcess(_deviceId).c_str(), defaultQos);
                 _mqttClient.subscribe(getTopicMachineOperation(_deviceId).c_str(), defaultQos);
                 _mqttClient.subscribe(getTopicMachineOperationEnd(_deviceId).c_str(), defaultQos);
                 _mqttClient.subscribe(getTopicMachineOperationStart(_deviceId).c_str(), defaultQos);

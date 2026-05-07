@@ -42,7 +42,7 @@
 // MQTT Topics
 #define TOPIC_PAYMENT "pm"
 #define TOPIC_DEVICE_STATUS "ds"
-#define TOPIC_PENDING_PAYMENT "pp"
+#define TOPIC_PAYMENT_PROCESS "pp"
 #define TOPIC_MACHINE_OPERATION "mop"
 #define TOPIC_MACHINE_OPERATION_END "moe"
 #define TOPIC_MACHINE_OPERATION_START "mos"
@@ -52,10 +52,10 @@ enum DeviceStateType
 {
     PAYMENT,
     DEVICE_STATUS,
-    PENDING_PAYMENT,
-    METADATA_ON_PENDING,
-    METADATA_ON_EXPIRED,
-    METADATA_ON_SUCCESS,
+    PAYMENT_PROCESS,
+    MACHINE_OPERATION,
+    MACHINE_OPERATION_END,
+    MACHINE_OPERATION_START,
     INIT,
     DISPLAY_PIN,
     VERIFICATION_RESULT,
@@ -69,10 +69,10 @@ enum DeviceStateType
 static const char *STATE_NAMES[] = {
     "pm",   // PAYMENT
     "ds",   // DEVICE_STATUS
-    "pp",   // PENDING_PAYMENT
-    "mop",  // METADATA_ON_PENDING
-    "moe",  // METADATA_ON_EXPIRED
-    "mos",  // METADATA_ON_SUCCESS
+    "pp",   // PAYMENT_PROCESS
+    "mop",  // MACHINE_OPERATION
+    "moe",  // MACHINE_OPERATION_END
+    "mos",  // MACHINE_OPERATION_START
     "init", // INIT
     "dpin", // DISPLAY_PIN_NUMBER
     "vr",   // VERIFICATION_RESULT
@@ -149,7 +149,7 @@ private:
     void mqttCallback(char *topic, byte *payload, unsigned int length);
     String getTopicPayment(String deviceId);
     String getTopicDeviceStatus(String deviceId);
-    String getTopicPendingPayment(String deviceId);
+    String getTopicPaymentProcess(String deviceId);
     String getTopicMachineOperation(String deviceId);
     String getTopicMachineOperationEnd(String deviceId);
     String getTopicMachineOperationStart(String deviceId);
