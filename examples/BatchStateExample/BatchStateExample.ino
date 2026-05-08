@@ -1,14 +1,14 @@
 /*
- * FirmnginKit Batch State Example
+ * Firmngin Batch State Example
  *
- * Example using pushBatchState() to send multiple states at once
+ * Example using pushBatchEntities() to send multiple states at once
  *
  * website: https://firmngin.dev
  * author: (Arif) Firmngin.dev
  */
 
 #include "keys.h"
-#include "firmnginKit.h"
+#include <firmngin.h>
 
 #if defined(ESP8266)
 #include <ESP8266WiFi.h>
@@ -16,17 +16,17 @@
 #include <WiFi.h>
 #endif
 
-#define DEVICE_ID "FNG_YOUR_DEVICE_ID"
-#define DEVICE_KEY "FNG_YOUR_DEVICE_KEY"
+#define DEVICE_ID "YOUR_DEVICE_ID"
+#define DEVICE_KEY "YOUR_DEVICE_SECRET_KEY"
 
 // WiFi credentials
 const char *ssid = "YOUR_SSID";
 const char *password = "YOUR_PASSWORD";
 
 #if defined(ESP8266)
-FirmnginKit fngin(DEVICE_ID, DEVICE_KEY, CLIENT_CERT, PRIVATE_KEY, SERVER_FINGERPRINT_BYTES);
+Firmngin fngin(DEVICE_ID, DEVICE_KEY, CLIENT_CERT, PRIVATE_KEY, SERVER_FINGERPRINT_BYTES);
 #elif defined(ESP32)
-FirmnginKit fngin(DEVICE_ID, DEVICE_KEY, SERVER_FINGERPRINT_BYTES, CLIENT_CERT, PRIVATE_KEY);
+Firmngin fngin(DEVICE_ID, DEVICE_KEY, SERVER_FINGERPRINT_BYTES, CLIENT_CERT, PRIVATE_KEY);
 #endif
 
 unsigned long lastBatchPush = 0;
@@ -67,7 +67,7 @@ void loop()
     int light = analogRead(A0);
     String status = "ONLINE";
 
-    bool sent = fngin.pushBatchState()
+    bool sent = fngin.pushBatchEntities()
       .add(10, String(temperature))      // int key, string value
       .add(20, String(humidity))         // int key, string value
       .add("pressure", String(pressure)) // string key, string value
@@ -81,7 +81,7 @@ void loop()
 
     delay(1000);
 
-    fngin.pushBatchState()
+    fngin.pushBatchEntities()
       .add(10, "ON")           // vpin 10
       .add(20, "25.5")          // vpin 20
       .add(30, "OFF")           // vpin 30
@@ -90,7 +90,7 @@ void loop()
 
     delay(1000);
 
-    fngin.pushBatchState()
+    fngin.pushBatchEntities()
       .add("gpio_1", "1")       // string key, string value
       .add("gpio_2", "0")       // string key, string value
       .add(50, 128)             // int key, int value (auto convert)

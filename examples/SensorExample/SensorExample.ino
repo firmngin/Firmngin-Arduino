@@ -1,15 +1,14 @@
 /*
- * FirmnginKit Sensor Example (DHT22)
+ * Firmngin Sensor Example (DHT22)
  *
- * Example using VPin with DHT22 sensor
- * Demonstrates: onChange(), interval(), threshold()
+ * Example using pushEntity() and pushBatchEntities() with DHT22 sensor
  *
  * website: https://firmngin.dev
  * author: Firmngin.dev
  */
 
 #include "keys.h"
-#include "firmnginKit.h"
+#include <firmngin.h>
 #include <DHT.h>
 
 #if defined(ESP8266)
@@ -18,8 +17,8 @@
 #include <WiFi.h>
 #endif
 
-#define DEVICE_ID "FNG_YOUR_DEVICE_ID"
-#define DEVICE_KEY "FNG_YOUR_DEVICE_KEY"
+#define DEVICE_ID "YOUR_DEVICE_ID"
+#define DEVICE_KEY "YOUR_DEVICE_SECRET_KEY"
 
 // WiFi credentials
 const char *ssid = "YOUR_SSID";
@@ -31,15 +30,12 @@ const char *password = "YOUR_PASSWORD";
 DHT dht(DHT_PIN, DHT_TYPE);
 
 #if defined(ESP8266)
-FirmnginKit fngin(DEVICE_ID, DEVICE_KEY, CLIENT_CERT, PRIVATE_KEY, SERVER_FINGERPRINT_BYTES);
+Firmngin fngin(DEVICE_ID, DEVICE_KEY, CLIENT_CERT, PRIVATE_KEY, SERVER_FINGERPRINT_BYTES);
 #elif defined(ESP32)
-FirmnginKit fngin(DEVICE_ID, DEVICE_KEY, SERVER_FINGERPRINT_BYTES, CLIENT_CERT, PRIVATE_KEY);
+Firmngin fngin(DEVICE_ID, DEVICE_KEY, SERVER_FINGERPRINT_BYTES, CLIENT_CERT, PRIVATE_KEY);
 #endif
 
-// VPin with push conditions (no GPIO, sensor data only)
-VPin temperature = VPin(10).onChange().threshold(0.5);  // Push when changed AND delta >= 0.5C
-VPin humidity = VPin(20).interval(10000);               // Push every 10 seconds
-VPin heatIndex = VPin(30).onChange().interval(5000);    // Push when changed AND every 5 seconds
+unsigned long lastBatchPush = 0;
 
 void setup()
 {
@@ -85,20 +81,18 @@ void loop()
   // Calculate heat index
   float hi = dht.computeHeatIndex(temp, hum, false);
 
-  // Push with conditions (returns true if actually pushed)
-  if (temperature.push(temp)) {
-    Serial.print("Pushed temperature: ");
-    Serial.println(temp);
-  }
+  // Push as a batch every 5 seconds
+  if (millis() - lastBatchPush >= 5000) {
+    lastBatchPush = millis();
+    bool sent = fngin.pushBatchEntities()
+      .add("temperature", String(temp))
+      .add("humidity", String(hum))
+      .add("heat_index", String(hi))
+      .send();
 
-  if (humidity.push(hum)) {
-    Serial.print("Pushed humidity: ");
-    Serial.println(hum);
-  }
-
-  if (heatIndex.push(hi)) {
-    Serial.print("Pushed heatIndex: ");
-    Serial.println(hi);
+    if (sent) {
+      Serial.println("Batch pushed: temperature, humidity, heat_index");
+    }
   }
 
   delay(2000);  // Read sensor every 2 seconds

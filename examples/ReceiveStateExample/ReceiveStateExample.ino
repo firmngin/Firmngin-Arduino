@@ -1,14 +1,14 @@
-/*
- * FirmnginKit Receive State Example
+/*******************************************************************************
+ * Firmngin Receive Entity Example
  *
- * Example using VPin to receive commands from server
+ * Example using Entity class to receive commands from backend and control GPIO
  *
  * website: https://firmngin.dev
  * author: (Arif) Firmngin.dev
- */
+ ******************************************************************************/
 
 #include "keys.h"
-#include "firmnginKit.h"
+#include <firmngin.h>
 
 #if defined(ESP8266)
 #include <ESP8266WiFi.h>
@@ -16,34 +16,35 @@
 #include <WiFi.h>
 #endif
 
-#define DEVICE_ID "FNG_YOUR_DEVICE_ID"
-#define DEVICE_KEY "FNG_YOUR_DEVICE_KEY"
+#define DEVICE_ID "YOUR_DEVICE_ID"
+#define DEVICE_KEY "YOUR_DEVICE_SECRET_KEY"
 
 // WiFi credentials
 const char *ssid = "YOUR_SSID";
 const char *password = "YOUR_PASSWORD";
 
-#if defined(ESP8266)
-FirmnginKit fngin(DEVICE_ID, DEVICE_KEY, CLIENT_CERT, PRIVATE_KEY, SERVER_FINGERPRINT_BYTES);
-#elif defined(ESP32)
-FirmnginKit fngin(DEVICE_ID, DEVICE_KEY, SERVER_FINGERPRINT_BYTES, CLIENT_CERT, PRIVATE_KEY);
-#endif
+Firmngin fngin(DEVICE_ID, DEVICE_KEY);
 
-// VPin with GPIO: receive commands from server
-VPin relay1(10, 2);              // vpin 10 -> GPIO 2 (digital)
-VPin relay2(20, 4, ACTIVE_LOW);  // vpin 20 -> GPIO 4 (active low)
-VPin led(30, 5, PWM);            // vpin 30 -> GPIO 5 (PWM 0-255)
+// Entity objects as key references
+Entity relay1("gpio_1");
+Entity relay2("relay_2");
+Entity led("pwm_1");
 
-// Register to receive server commands
-ON_VPIN(relay1);
-ON_VPIN(relay2);
-ON_VPIN(led);
+// Register callbacks for entity objects
+ON_ENTITY(relay1, [](EntityCommand &cmd)
+          { digitalWrite(2, cmd.value() == "1" ? HIGH : LOW); });
 
-// Custom callback for complex logic
-ON_VPIN(40, [](String payload) {
-  Serial.print("Virtual Pin 40 received: ");
-  Serial.println(payload);
-});
+ON_ENTITY(relay2, [](EntityCommand &cmd)
+          { digitalWrite(4, cmd.value() == "1" ? HIGH : LOW); });
+
+ON_ENTITY(led, [](EntityCommand &cmd)
+          { analogWrite(5, cmd.value().toInt()); });
+
+// Custom callback for complex logic (using string key)
+ON_ENTITY_S("status", [](EntityCommand &cmd)
+            {
+  Serial.print("Status entity received: ");
+  Serial.println(cmd.value()); });
 
 void setup()
 {
@@ -53,7 +54,8 @@ void setup()
   WiFi.begin(ssid, password);
   Serial.print("Connecting to WiFi");
 
-  while (WiFi.status() != WL_CONNECTED) {
+  while (WiFi.status() != WL_CONNECTED)
+  {
     delay(500);
     Serial.print(".");
   }

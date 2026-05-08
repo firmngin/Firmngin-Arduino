@@ -1,5 +1,5 @@
 /*
- * FirmnginKit Ethernet Example
+ * Firmngin Ethernet Example
  *
  * Example of using setClient() for Ethernet connection
  * Supports: W5500, ENC28J60, or other Ethernet Shields
@@ -9,18 +9,18 @@
  */
 
 #include "keys.h"
-#include "firmnginKit.h"
+#include <firmngin.h>
 #include <SPI.h>
 #include <Ethernet.h>
 
-#define DEVICE_ID "FNG_YOUR_DEVICE_ID"
-#define DEVICE_KEY "FNG_YOUR_DEVICE_KEY"
+#define DEVICE_ID "YOUR_DEVICE_ID"
+#define DEVICE_KEY "YOUR_DEVICE_SECRET_KEY"
 
 
 #if defined(ESP8266)
-FirmnginKit fngin(DEVICE_ID, DEVICE_KEY, CLIENT_CERT, PRIVATE_KEY, SERVER_FINGERPRINT_BYTES);
+Firmngin fngin(DEVICE_ID, DEVICE_KEY, CLIENT_CERT, PRIVATE_KEY, SERVER_FINGERPRINT_BYTES);
 #elif defined(ESP32)
-FirmnginKit fngin(DEVICE_ID, DEVICE_KEY, SERVER_FINGERPRINT_BYTES, CLIENT_CERT, PRIVATE_KEY);
+Firmngin fngin(DEVICE_ID, DEVICE_KEY, SERVER_FINGERPRINT_BYTES, CLIENT_CERT, PRIVATE_KEY);
 #endif
 
 
@@ -30,17 +30,25 @@ byte mac[] = { 0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0xED };
 // Ethernet Client
 EthernetClient ethClient;
 
-// PinMap for relay control
-PinMap relay1(10, 2);
-PinMap relay2(20, 4, ACTIVE_LOW);
+// Entity keys for relay control
+Entity relay1("gpio_1");
+Entity relay2("gpio_2");
 
-ON_VPIN(relay1);
-ON_VPIN(relay2);
+ON_ENTITY(relay1, [](EntityCommand &cmd) {
+  digitalWrite(2, cmd.value() == "1" ? HIGH : LOW);
+});
+
+ON_ENTITY(relay2, [](EntityCommand &cmd) {
+  digitalWrite(4, cmd.value() == "1" ? HIGH : LOW);
+});
 
 void setup()
 {
   Serial.begin(115200);
-  Serial.println("FirmnginKit Ethernet Example");
+  Serial.println("Firmngin Ethernet Example");
+
+  pinMode(2, OUTPUT);
+  pinMode(4, OUTPUT);
 
   // Initialize Ethernet with DHCP
   Serial.print("Initializing Ethernet with DHCP...");

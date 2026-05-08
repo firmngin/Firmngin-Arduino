@@ -1,93 +1,110 @@
 #!/bin/bash
 
-# Path dari script ke root project
-ROOT_DIR=".."
-# Path ke folder library
-LIB_DIR="$ROOT_DIR/lib/firmnginKit"
-# Path ke file library.properties
+# Absolute path from script directory to project root
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+# Path to library.properties
 LIBRARY_PROPS="$ROOT_DIR/library.properties"
 
-# Periksa apakah file library.properties ada
+# Check whether library.properties exists
 if [ ! -f "$LIBRARY_PROPS" ]; then
-    echo "Error: File library.properties tidak ditemukan di $LIBRARY_PROPS"
-    echo "Menggunakan library.properties dari folder library sebagai fallback"
-    LIBRARY_PROPS="$LIB_DIR/library.properties"
+    echo "Error: library.properties not found at $LIBRARY_PROPS"
+    echo "Using root project library.properties as fallback"
+    LIBRARY_PROPS="$ROOT_DIR/library.properties"
 fi
 
-# Pastikan output tetap di folder root/releases
+# Keep output inside root/releases
 RELEASE_OUTPUT_DIR="$ROOT_DIR/releases"
 mkdir -p "$RELEASE_OUTPUT_DIR"
 
-# Tampilkan isi library.properties untuk debugging
-echo "Menggunakan library.properties dari: $LIBRARY_PROPS"
-echo "Isi library.properties:"
+# Show library.properties contents for debugging
+echo "Using library.properties from: $LIBRARY_PROPS"
+echo "library.properties contents:"
 cat "$LIBRARY_PROPS"
 echo "-------------------"
 
-# Baca versi dari library.properties
+# Read version from library.properties
 VERSION=$(grep "version=" "$LIBRARY_PROPS" | cut -d'=' -f2)
 
-# Periksa apakah versi berhasil diambil
+# Check whether version was read successfully
 if [ -z "$VERSION" ]; then
-    echo "Error: Tidak dapat membaca versi dari library.properties"
-    echo "Menggunakan versi default 1.0.0"
+    echo "Error: unable to read version from library.properties"
+    echo "Using default version 1.0.0"
     VERSION="1.0.0"
 fi
 
-LIBRARY_NAME="firmnginKit"
+LIBRARY_NAME="firmngin"
 RELEASE_DIR="$RELEASE_OUTPUT_DIR/${LIBRARY_NAME}-${VERSION}"
 
-echo "Membuat release untuk ${LIBRARY_NAME} versi ${VERSION}"
+echo "Creating release for ${LIBRARY_NAME} version ${VERSION}"
 
-# Buat direktori release
+# Create release directory
 rm -rf "$RELEASE_DIR"
 mkdir -p "$RELEASE_DIR/src"
 mkdir -p "$RELEASE_DIR/examples/BasicExample"
 
-# Copy file-file utama
+# Copy main files
 cp "$LIBRARY_PROPS" "$RELEASE_DIR/library.properties"
 
-# Copy file dari folder root jika tersedia
-cp "$ROOT_DIR/keywords.txt" "$RELEASE_DIR/" 2>/dev/null || echo "keywords.txt tidak ditemukan di root"
-cp "$ROOT_DIR/License" "$RELEASE_DIR/" 2>/dev/null || echo "License tidak ditemukan di root" 
-cp "$ROOT_DIR/readme.md" "$RELEASE_DIR/" 2>/dev/null || echo "readme.md tidak ditemukan di root"
-cp "$ROOT_DIR/README.md" "$RELEASE_DIR/" 2>/dev/null || echo "README.md tidak ditemukan di root"
+# Copy files from root if available
+cp "$ROOT_DIR/keywords.txt" "$RELEASE_DIR/" 2>/dev/null || echo "keywords.txt not found in root"
+cp "$ROOT_DIR/License" "$RELEASE_DIR/" 2>/dev/null || echo "License not found in root" 
+cp "$ROOT_DIR/readme.md" "$RELEASE_DIR/" 2>/dev/null || echo "readme.md not found in root"
+cp "$ROOT_DIR/README.md" "$RELEASE_DIR/" 2>/dev/null || echo "README.md not found in root"
 
-# Copy file dari folder library sebagai fallback jika tidak ada di root
-[ ! -f "$RELEASE_DIR/README.md" ] && [ -f "$LIB_DIR/README.md" ] && cp "$LIB_DIR/README.md" "$RELEASE_DIR/" || echo "README.md tidak ditemukan"
-[ ! -f "$RELEASE_DIR/keywords.txt" ] && [ -f "$LIB_DIR/keywords.txt" ] && cp "$LIB_DIR/keywords.txt" "$RELEASE_DIR/" || echo "keywords.txt tidak ditemukan"
-cp "$LIB_DIR/CHANGELOG.md" "$RELEASE_DIR/" 2>/dev/null || echo "CHANGELOG.md tidak ditemukan"
+# Copy files from root project as fallback if missing
+[ ! -f "$RELEASE_DIR/README.md" ] && [ -f "$ROOT_DIR/README.md" ] && cp "$ROOT_DIR/README.md" "$RELEASE_DIR/" || echo "README.md not found"
+[ ! -f "$RELEASE_DIR/keywords.txt" ] && [ -f "$ROOT_DIR/keywords.txt" ] && cp "$ROOT_DIR/keywords.txt" "$RELEASE_DIR/" || echo "keywords.txt not found"
+cp "$ROOT_DIR/CHANGELOG.md" "$RELEASE_DIR/" 2>/dev/null || echo "CHANGELOG.md not found"
 
-# Copy source files - memperbaiki format perintah cp
-cp "$ROOT_DIR/src/firmnginKit.h" "$RELEASE_DIR/src/" 2>/dev/null || echo "firmnginKit.h tidak ditemukan"
-cp "$ROOT_DIR/src/firmnginKit.cpp" "$RELEASE_DIR/src/" 2>/dev/null || echo "firmnginKit.cpp tidak ditemukan"
+# Copy source files
+cp "$ROOT_DIR/src/firmngin.h" "$RELEASE_DIR/src/" 2>/dev/null || echo "firmngin.h not found"
+cp "$ROOT_DIR/src/firmngin.cpp" "$RELEASE_DIR/src/" 2>/dev/null || echo "firmngin.cpp not found"
 
 # Copy examples
-echo "Menyalin examples..."
-# Coba ambil examples dari root project dulu
+echo "Copying examples..."
+# Try to use examples from the root project first
 if [ -d "$ROOT_DIR/examples" ]; then
-    echo "Menggunakan examples dari folder root"
-    cp -r "$ROOT_DIR/examples/"* "$RELEASE_DIR/examples/" 2>/dev/null || echo "Gagal menyalin examples dari root"
-# Jika tidak ada di root, coba dari lib
-elif [ -d "$LIB_DIR/examples" ]; then
-    echo "Menggunakan examples dari folder library"
-    cp -r "$LIB_DIR/examples/"* "$RELEASE_DIR/examples/" 2>/dev/null || echo "Gagal menyalin examples dari library"
+    echo "Using examples from the root folder"
+    (cd "$ROOT_DIR" && tar \
+        --exclude='*/keys.h' \
+        --exclude='*/.DS_Store' \
+        --exclude='*/.!*.DS_Store' \
+        -cf - examples) | (cd "$RELEASE_DIR" && tar -xf -) || echo "Failed to copy examples from root"
 else
-    echo "Folder examples tidak ditemukan di root atau library!"
-    # Buat contoh kosong supaya struktur valid
-    echo "// Contoh dasar penggunaan firmnginKit" > "$RELEASE_DIR/examples/BasicExample/BasicExample.ino"
+    echo "Examples folder not found in root!"
+    # Create a minimal example so the package structure stays valid
+    echo "// Basic Firmngin usage example" > "$RELEASE_DIR/examples/BasicExample/BasicExample.ino"
     echo "void setup() {}" >> "$RELEASE_DIR/examples/BasicExample/BasicExample.ino"
     echo "void loop() {}" >> "$RELEASE_DIR/examples/BasicExample/BasicExample.ino"
 fi
 
-# Buat ZIP
+# Validate that all primary examples are present
+EXPECTED_EXAMPLES=(
+    "BasicExample/BasicExample.ino"
+    "BasicMonetizeExample/BasicMonetizeExample.ino"
+    "BatchStateExample/BatchStateExample.ino"
+    "DisplayPINExample/DisplayPINExample.ino"
+    "EthernetExample/EthernetExample.ino"
+    "PushStateExample/PushStateExample.ino"
+    "ReceiveStateExample/ReceiveStateExample.ino"
+    "SensorExample/SensorExample.ino"
+)
+
+for example_file in "${EXPECTED_EXAMPLES[@]}"; do
+    if [ ! -f "$RELEASE_DIR/examples/$example_file" ]; then
+        echo "Warning: example not found: $example_file"
+    fi
+done
+
+# Create ZIP
 ZIP_FILE="$RELEASE_OUTPUT_DIR/${LIBRARY_NAME}-${VERSION}.zip"
 rm -f "$ZIP_FILE"
 (cd "$RELEASE_OUTPUT_DIR" && zip -r "${LIBRARY_NAME}-${VERSION}.zip" "${LIBRARY_NAME}-${VERSION}")
 
-echo "Release package dibuat: $ZIP_FILE"
+echo "Release package created: $ZIP_FILE"
 
 # Cleanup
 rm -rf "$RELEASE_DIR"
 
-echo "Selesai!"
+echo "Done!"

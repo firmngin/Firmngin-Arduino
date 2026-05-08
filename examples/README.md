@@ -1,10 +1,10 @@
-# FirmnginKit Examples
+# Firmngin Examples
 
-This folder contains examples for using the FirmnginKit library.
+This folder contains examples for using the Firmngin library.
 
 ## Setup
 
-1. **Copy library files**: Copy `firmnginKit.h` and `firmnginKit.cpp` from `src/` folder to your example folder
+1. **Use the shared library**: Include `<firmngin.h>` from the root `src/` folder; do not copy library files into each example
 2. **Create keys.h**: For mTLS authentication, create a `keys.h` file with your certificates (see template in `src/keys.h.template`)
 3. **Configure WiFi**: Update WiFi credentials in the example
 4. **Upload and test**: Use PlatformIO or Arduino IDE to compile and upload
