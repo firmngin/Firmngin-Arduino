@@ -1,6 +1,10 @@
 # Firmngin Arduino Library
 
-IoT Library for the Firmngin Platform. Enables ESP8266/ESP32 devices to accept payments, receive commands, and communicate securely over MQTT with mTLS support.
+<p align="center">
+  <img src="https://github.com/firmngin/Firmngin-Arduino/blob/main/logo.png?raw=true" alt="Firmngin" width="96">
+</p>
+
+IoT Library for the Firmngin Platform. Enables ESP8266/ESP32 devices to accept payments, receive commands, and communicate securely with mTLS support.
 
 Check out [firmngin.dev](https://firmngin.dev) for more information.
 
@@ -404,29 +408,29 @@ pio run -e esp32dev
 
 ### Core Methods
 
-| Function                      | Description                                                      | Return Type  | Possible Values                 |
-| ----------------------------- | ---------------------------------------------------------------- | ------------ | ------------------------------- |
-| `begin()`                     | Initialize library, sync time, setup mTLS, and connect to server | `void`       | —                               |
-| `loop()`                      | Maintain connection and process incoming messages                | `void`       | —                               |
-| `setDebug(bool)`              | Enable/disable debug output to Serial                            | `void`       | `true`, `false`                 |
-| `setTimezone(int)`            | Set timezone offset from GMT                                     | `void`       | `-12` to `12`                   |
-| `setDaylightOffsetSec(int)`   | Set daylight saving offset in seconds                            | `void`       | Any integer                     |
-| `setNtpServer(const char*)`   | Set NTP server address                                           | `void`       | e.g. `"pool.ntp.org"`           |
+| Function                      | Description                                                      | Return Type  | Possible Values                   |
+| ----------------------------- | ---------------------------------------------------------------- | ------------ | --------------------------------- |
+| `begin()`                     | Initialize library, sync time, setup mTLS, and connect to server | `void`       | —                                 |
+| `loop()`                      | Maintain connection and process incoming messages                | `void`       | —                                 |
+| `setDebug(bool)`              | Enable/disable debug output to Serial                            | `void`       | `true`, `false`                   |
+| `setTimezone(int)`            | Set timezone offset from GMT                                     | `void`       | `-12` to `12`                     |
+| `setDaylightOffsetSec(int)`   | Set daylight saving offset in seconds                            | `void`       | Any integer                       |
+| `setNtpServer(const char*)`   | Set NTP server address                                           | `void`       | e.g. `"pool.ntp.org"`             |
 | `setClient(Client&)`          | Use an external network client                                   | `void`       | EthernetClient, other Client impl |
-| `isPlatformSupported()`       | Check if current board is supported                              | `bool`       | `true` (ESP8266/ESP32), `false` |
-| `on(STATE, callback)`         | Register a raw callback for any state                            | `void`       | See enum constants              |
-| `on(VERIFICATIONS, callback)` | Register typed callback for dpin + vr                            | `void`       | `Verifications &`               |
-| `on(PAYMENTS, callback)`      | Register typed callback for pp + pm                              | `void`       | `Payments &`                    |
-| `on(USAGES, callback)`        | Register typed callback for ur + le + nl                         | `void`       | `Usages &`                      |
-| `on(DEVICE_STATUS, callback)` | Register typed callback for ds                                   | `void`       | `DeviceStates &`                |
-| `on(INIT, callback)`          | Register typed callback for init                                 | `void`       | `Inits &`                       |
-| `on(ENTITIES, callback)`      | Register typed callback for entity commands                      | `void`       | `EntityCommand &`               |
-| `onEntity(key, callback)`     | Register callback for a specific entity key (string or object)   | `void`       | `EntityCommand &`               |
-| `pushEntity(key, value)`      | Send a single entity state update                                | `bool`       | `true` = sent, `false` = fail   |
-| `pushEntity(entity, value)`   | Send entity state using Entity object as key                     | `bool`       | `true` = sent, `false` = fail   |
-| `updateEntities(json)`        | Send multiple entity states as JSON array                        | `bool`       | `true` = sent, `false` = fail   |
-| `pushBatchEntities()`         | Start batch state builder (chain `.add().send()`)                | `BatchState` | Builder object                  |
-| `requestInit()`               | Request initial configuration                                    | `bool`       | `true` = sent, `false` = fail   |
+| `isPlatformSupported()`       | Check if current board is supported                              | `bool`       | `true` (ESP8266/ESP32), `false`   |
+| `on(STATE, callback)`         | Register a raw callback for any state                            | `void`       | See enum constants                |
+| `on(VERIFICATIONS, callback)` | Register typed callback for dpin + vr                            | `void`       | `Verifications &`                 |
+| `on(PAYMENTS, callback)`      | Register typed callback for pp + pm                              | `void`       | `Payments &`                      |
+| `on(USAGES, callback)`        | Register typed callback for ur + le + nl                         | `void`       | `Usages &`                        |
+| `on(DEVICE_STATUS, callback)` | Register typed callback for ds                                   | `void`       | `DeviceStates &`                  |
+| `on(INIT, callback)`          | Register typed callback for init                                 | `void`       | `Inits &`                         |
+| `on(ENTITIES, callback)`      | Register typed callback for entity commands                      | `void`       | `EntityCommand &`                 |
+| `onEntity(key, callback)`     | Register callback for a specific entity key (string or object)   | `void`       | `EntityCommand &`                 |
+| `pushEntity(key, value)`      | Send a single entity state update                                | `bool`       | `true` = sent, `false` = fail     |
+| `pushEntity(entity, value)`   | Send entity state using Entity object as key                     | `bool`       | `true` = sent, `false` = fail     |
+| `updateEntities(json)`        | Send multiple entity states as JSON array                        | `bool`       | `true` = sent, `false` = fail     |
+| `pushBatchEntities()`         | Start batch state builder (chain `.add().send()`)                | `BatchState` | Builder object                    |
+| `requestInit()`               | Request initial configuration                                    | `bool`       | `true` = sent, `false` = fail     |
 
 ### Verifications Object
 

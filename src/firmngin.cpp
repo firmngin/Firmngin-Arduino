@@ -6,10 +6,10 @@ int DAYLIGHT_OFFSET_SEC = 0;
 
 // Use mqtt_server from keys.h if available, otherwise use default from header
 #if KEYS_H_AVAILABLE
-const char* MQTT_SERVER_ADDR = mqtt_server;
+const char *MQTT_SERVER_ADDR = mqtt_server;
 const int MQTT_SERVER_PORT = mqtt_port;
 #else
-const char* MQTT_SERVER_ADDR = DEFAULT_MQTT_SERVER;
+const char *MQTT_SERVER_ADDR = DEFAULT_MQTT_SERVER;
 const int MQTT_SERVER_PORT = DEFAULT_MQTT_PORT;
 #endif
 
@@ -23,7 +23,8 @@ Firmngin::Firmngin(const char *deviceId, const char *deviceKey)
       _mqttPort(MQTT_SERVER_PORT)
 {
     (void)deviceKey;
-    if (!PLATFORM_SUPPORTED) {
+    if (!PLATFORM_SUPPORTED)
+    {
         Serial.println("ERROR: Platform not supported");
     }
 }
@@ -40,7 +41,8 @@ Firmngin::Firmngin(const char *deviceId, const char *deviceKey, const char *clie
       _fingerprint(fingerprint)
 {
     (void)deviceKey;
-    if (!PLATFORM_SUPPORTED) {
+    if (!PLATFORM_SUPPORTED)
+    {
         Serial.println("ERROR: Platform not supported");
     }
 }
@@ -54,7 +56,8 @@ Firmngin::Firmngin(const char *deviceId, const char *deviceKey)
       _mqttPort(MQTT_SERVER_PORT)
 {
     (void)deviceKey;
-    if (!PLATFORM_SUPPORTED) {
+    if (!PLATFORM_SUPPORTED)
+    {
         Serial.println("ERROR: Platform not supported");
     }
 }
@@ -72,7 +75,8 @@ Firmngin::Firmngin(const char *deviceId, const char *deviceKey, const char *caCe
       _fingerprint(nullptr)
 {
     (void)deviceKey;
-    if (!PLATFORM_SUPPORTED) {
+    if (!PLATFORM_SUPPORTED)
+    {
         Serial.println("ERROR: Platform not supported");
     }
 }
@@ -90,7 +94,8 @@ Firmngin::Firmngin(const char *deviceId, const char *deviceKey, const uint8_t *f
       _fingerprint(fingerprint)
 {
     (void)deviceKey;
-    if (!PLATFORM_SUPPORTED) {
+    if (!PLATFORM_SUPPORTED)
+    {
         Serial.println("ERROR: Platform not supported");
     }
 }
@@ -104,87 +109,108 @@ Firmngin::Firmngin(const char *deviceId, const char *deviceKey)
       _mqttPort(MQTT_SERVER_PORT)
 {
     (void)deviceKey;
-    if (!PLATFORM_SUPPORTED) {
+    if (!PLATFORM_SUPPORTED)
+    {
         Serial.println("ERROR: Platform not supported");
     }
 }
 #endif
 
-Firmngin::~Firmngin() {
+Firmngin::~Firmngin()
+{
 #if defined(ESP8266) && KEYS_H_AVAILABLE
     delete _clientCertList;
     delete _clientPrivKey;
 #endif
 }
 
-String Firmngin::getPathPayment(String deviceId) {
+String Firmngin::getPathPayment(String deviceId)
+{
     return String("/c/") + deviceId + "/" + PATH_PAYMENT;
 }
 
-String Firmngin::getPathDeviceStatus(String deviceId) {
+String Firmngin::getPathDeviceStatus(String deviceId)
+{
     return String("/c/") + deviceId + "/" + PATH_DEVICE_STATUS;
 }
 
-String Firmngin::getPathPendingPayment(String deviceId) {
+String Firmngin::getPathPendingPayment(String deviceId)
+{
     return String("/c/") + deviceId + "/" + PATH_PENDING_PAYMENT;
 }
 
-String Firmngin::getPathMetadataOnPending(String deviceId) {
+String Firmngin::getPathMetadataOnPending(String deviceId)
+{
     return String("/c/") + deviceId + "/" + PATH_METADATA_ON_PENDING;
 }
 
-String Firmngin::getPathMetadataOnExpired(String deviceId) {
+String Firmngin::getPathMetadataOnExpired(String deviceId)
+{
     return String("/c/") + deviceId + "/" + PATH_METADATA_ON_EXPIRED;
 }
 
-String Firmngin::getPathMetadataOnSuccess(String deviceId) {
+String Firmngin::getPathMetadataOnSuccess(String deviceId)
+{
     return String("/c/") + deviceId + "/" + PATH_METADATA_ON_SUCCESS;
 }
 
-String Firmngin::getTopicInit(String deviceId) {
+String Firmngin::getTopicInit(String deviceId)
+{
     return String("/c/") + deviceId + "/init";
 }
 
-String Firmngin::getTopicDisplayPIN(String deviceId) {
+String Firmngin::getTopicDisplayPIN(String deviceId)
+{
     return String("/c/") + deviceId + "/dpin";
 }
 
-String Firmngin::getTopicVerificationResult(String deviceId) {
+String Firmngin::getTopicVerificationResult(String deviceId)
+{
     return String("/c/") + deviceId + "/vr";
 }
 
-String Firmngin::getTopicUsageResponse(String deviceId) {
+String Firmngin::getTopicUsageResponse(String deviceId)
+{
     return String("/c/") + deviceId + "/ur";
 }
 
-String Firmngin::getTopicLimitExceeded(String deviceId) {
+String Firmngin::getTopicLimitExceeded(String deviceId)
+{
     return String("/c/") + deviceId + "/le";
 }
 
-String Firmngin::getTopicNearLimit(String deviceId) {
+String Firmngin::getTopicNearLimit(String deviceId)
+{
     return String("/c/") + deviceId + "/nl";
 }
 
-String Firmngin::getTopicUpdateEntity(String deviceId) {
+String Firmngin::getTopicUpdateEntity(String deviceId)
+{
     return String("/d/") + deviceId + "/ps";
 }
 
-String Firmngin::getTopicUpdateEntities(String deviceId) {
+String Firmngin::getTopicUpdateEntities(String deviceId)
+{
     return String("/d/") + deviceId + "/psb";
 }
 
-String Firmngin::getTopicRequestInit(String deviceId) {
+String Firmngin::getTopicRequestInit(String deviceId)
+{
     return String("/d/") + deviceId + "/a/init";
 }
 
-String Firmngin::getTopicEntityCommand(String deviceId) {
+String Firmngin::getTopicEntityCommand(String deviceId)
+{
     return String("/d/") + deviceId + "/rs/+";
 }
 
-void Firmngin::begin() {
-    if (!PLATFORM_SUPPORTED) return;
+void Firmngin::begin()
+{
+    if (!PLATFORM_SUPPORTED)
+        return;
 
-    if (WiFi.status() != WL_CONNECTED) {
+    if (WiFi.status() != WL_CONNECTED)
+    {
         Serial.println("ERROR: WiFi not connected");
         delay(2000);
         ESP.restart();
@@ -198,13 +224,17 @@ void Firmngin::begin() {
     const char *privateKey = _privateKey;
     const uint8_t *fingerprint = _fingerprint;
 
-    #if KEYS_H_AVAILABLE
-        if (clientCert == nullptr) clientCert = CLIENT_CERT;
-        if (privateKey == nullptr) privateKey = PRIVATE_KEY;
-        if (fingerprint == nullptr) fingerprint = SERVER_FINGERPRINT_BYTES;
-    #endif
+#if KEYS_H_AVAILABLE
+    if (clientCert == nullptr)
+        clientCert = CLIENT_CERT;
+    if (privateKey == nullptr)
+        privateKey = PRIVATE_KEY;
+    if (fingerprint == nullptr)
+        fingerprint = SERVER_FINGERPRINT_BYTES;
+#endif
 
-    if (clientCert == nullptr || privateKey == nullptr || fingerprint == nullptr) {
+    if (clientCert == nullptr || privateKey == nullptr || fingerprint == nullptr)
+    {
         Serial.println("ERROR: mTLS credentials not configured");
         return;
     }
@@ -219,18 +249,23 @@ void Firmngin::begin() {
     const char *clientCert = _clientCert;
     const char *privateKey = _privateKey;
 
-    #if KEYS_H_AVAILABLE
-        if (caCert == nullptr) caCert = CA_CERT;
-        if (clientCert == nullptr) clientCert = CLIENT_CERT;
-        if (privateKey == nullptr) privateKey = PRIVATE_KEY;
-    #endif
+#if KEYS_H_AVAILABLE
+    if (caCert == nullptr)
+        caCert = CA_CERT;
+    if (clientCert == nullptr)
+        clientCert = CLIENT_CERT;
+    if (privateKey == nullptr)
+        privateKey = PRIVATE_KEY;
+#endif
 
-    if (clientCert == nullptr || privateKey == nullptr) {
+    if (clientCert == nullptr || privateKey == nullptr)
+    {
         Serial.println("ERROR: mTLS credentials not configured");
         return;
     }
 
-    if (caCert != nullptr) {
+    if (caCert != nullptr)
+    {
         _wifiClient.setCACert(caCert);
     }
     _wifiClient.setCertificate(clientCert);
@@ -238,71 +273,84 @@ void Firmngin::begin() {
 #endif
 
     _mqttClient.setServer(_mqttServer.c_str(), _mqttPort);
-    _mqttClient.setCallback([this](char *topic, byte *payload, unsigned int length) {
-        this->mqttCallback(topic, payload, length);
-    });
+    _mqttClient.setCallback([this](char *topic, byte *payload, unsigned int length)
+                            { this->mqttCallback(topic, payload, length); });
     _mqttClient.setBufferSize(2048);
     _mqttClient.setKeepAlive(30);
     _mqttClient.setSocketTimeout(10);
 
-    for (const auto &entry : deferredEntityRegistrations()) {
+    for (const auto &entry : deferredEntityRegistrations())
+    {
         _entityCallbacks[entry.first] = entry.second;
     }
 }
 
-void Firmngin::setMQTTServer(const char* server, int port) {
+void Firmngin::setMQTTServer(const char *server, int port)
+{
     _mqttServer = server;
     _mqttPort = port;
 }
 
-void Firmngin::setTimezone(int timezone) {
-    if (timezone < -12 || timezone > 12) return;
+void Firmngin::setTimezone(int timezone)
+{
+    if (timezone < -12 || timezone > 12)
+        return;
     GMT_OFFSET_SEC = timezone * 3600;
 }
 
-void Firmngin::setNtpServer(const char *ntpServer) {
+void Firmngin::setNtpServer(const char *ntpServer)
+{
     NTP_SERVER = ntpServer;
 }
 
-void Firmngin::setClient(Client &client) {
+void Firmngin::setClient(Client &client)
+{
     _mqttClient.setClient(client);
 }
 
-void Firmngin::setDaylightOffsetSec(int daylightOffsetSec) {
+void Firmngin::setDaylightOffsetSec(int daylightOffsetSec)
+{
     DAYLIGHT_OFFSET_SEC = daylightOffsetSec;
 }
 
-void Firmngin::syncTime() {
+void Firmngin::syncTime()
+{
     configTime(GMT_OFFSET_SEC, DAYLIGHT_OFFSET_SEC, NTP_SERVER);
     time_t now = time(nullptr);
     int timeout = 0;
-    while (now < 8 * 3600 * 2 && timeout < 100) {
+    while (now < 8 * 3600 * 2 && timeout < 100)
+    {
         delay(100);
         now = time(nullptr);
         timeout++;
     }
 }
 
-void Firmngin::on(const char* state, StateCallbackFunction callback) {
+void Firmngin::on(const char *state, StateCallbackFunction callback)
+{
     _callbacks[String(state)] = callback;
 }
 
-void Firmngin::on(DeviceStateType state, StateCallbackFunction callback) {
+void Firmngin::on(DeviceStateType state, StateCallbackFunction callback)
+{
     _callbacks[String(STATE_NAMES[state])] = callback;
 }
 
-void Firmngin::on(DeviceStateType state, VerificationCallbackFunction callback) {
+void Firmngin::on(DeviceStateType state, VerificationCallbackFunction callback)
+{
     (void)state;
     _verificationCallback = callback;
 }
 
-void Firmngin::on(DeviceStateType state, PaymentCallbackFunction callback) {
+void Firmngin::on(DeviceStateType state, PaymentCallbackFunction callback)
+{
     (void)state;
     _paymentsCallback = callback;
 }
 
 // Verifications constructor — parses dpin or vr JSON automatically
-Verifications::Verifications(const String &jsonPayload) {
+Verifications::Verifications(const String &jsonPayload)
+{
     _valid = false;
     _pin = "";
     _sessionId = "";
@@ -313,24 +361,30 @@ Verifications::Verifications(const String &jsonPayload) {
 
     StaticJsonDocument<512> doc;
     DeserializationError error = deserializeJson(doc, jsonPayload);
-    if (error) return;
+    if (error)
+        return;
 
     // dpin fields
-    if (doc.containsKey("pi")) {
+    if (doc.containsKey("pi"))
+    {
         _pin = doc["pi"].as<String>();
     }
-    if (doc.containsKey("si")) {
+    if (doc.containsKey("si"))
+    {
         _sessionId = doc["si"].as<String>();
     }
-    if (doc.containsKey("ttl")) {
+    if (doc.containsKey("ttl"))
+    {
         _ttl = doc["ttl"].as<int>();
     }
 
     // vr fields
-    if (doc.containsKey("pn")) {
+    if (doc.containsKey("pn"))
+    {
         _pinMet = doc["pn"].as<bool>();
     }
-    if (doc.containsKey("pr")) {
+    if (doc.containsKey("pr"))
+    {
         _preconditionMet = doc["pr"].as<bool>();
     }
 
@@ -338,7 +392,8 @@ Verifications::Verifications(const String &jsonPayload) {
 }
 
 // Payments constructor — parses pp or pm JSON automatically
-Payments::Payments(const String &jsonPayload) {
+Payments::Payments(const String &jsonPayload)
+{
     _valid = false;
     _itemTitle = "";
     _price = "";
@@ -349,47 +404,57 @@ Payments::Payments(const String &jsonPayload) {
 
     StaticJsonDocument<512> doc;
     DeserializationError error = deserializeJson(doc, jsonPayload);
-    if (error) return;
+    if (error)
+        return;
 
-    if (doc.containsKey("it")) {
+    if (doc.containsKey("it"))
+    {
         _itemTitle = doc["it"].as<String>();
     }
-    if (doc.containsKey("pc")) {
+    if (doc.containsKey("pc"))
+    {
         _price = doc["pc"].as<String>();
     }
-    if (doc.containsKey("oid")) {
+    if (doc.containsKey("oid"))
+    {
         _orderId = doc["oid"].as<String>();
     }
 
     _valid = _itemTitle.length() > 0 || _orderId.length() > 0;
 }
 
-void Firmngin::on(DeviceStateType state, UsageCallbackFunction callback) {
+void Firmngin::on(DeviceStateType state, UsageCallbackFunction callback)
+{
     (void)state;
     _usagesCallback = callback;
 }
 
-void Firmngin::on(DeviceStateType state, DeviceStateCallbackFunction callback) {
+void Firmngin::on(DeviceStateType state, DeviceStateCallbackFunction callback)
+{
     (void)state;
     _deviceStateCallback = callback;
 }
 
-void Firmngin::on(DeviceStateType state, InitCallbackFunction callback) {
+void Firmngin::on(DeviceStateType state, InitCallbackFunction callback)
+{
     (void)state;
     _initCallback = callback;
 }
 
-void Firmngin::on(DeviceStateType state, EntityCommandCallbackFunction callback) {
+void Firmngin::on(DeviceStateType state, EntityCommandCallbackFunction callback)
+{
     (void)state;
     _entityCallback = callback;
 }
 
-void Firmngin::onEntity(const char* key, EntityCommandCallbackFunction callback) {
+void Firmngin::onEntity(const char *key, EntityCommandCallbackFunction callback)
+{
     _entityCallbacks[String(key)] = callback;
 }
 
 // Inits constructor — parses init JSON automatically
-Inits::Inits(const String &jsonPayload) {
+Inits::Inits(const String &jsonPayload)
+{
     _valid = false;
     _entitiesJson = "";
     _merchantStatus = "";
@@ -398,17 +463,21 @@ Inits::Inits(const String &jsonPayload) {
 
     StaticJsonDocument<2048> doc;
     DeserializationError error = deserializeJson(doc, jsonPayload);
-    if (error) return;
+    if (error)
+        return;
 
-    if (doc.containsKey("e")) {
+    if (doc.containsKey("e"))
+    {
         String entitiesStr;
         serializeJson(doc["e"], entitiesStr);
         _entitiesJson = entitiesStr;
     }
-    if (doc.containsKey("m")) {
+    if (doc.containsKey("m"))
+    {
         _merchantStatus = doc["m"].as<String>();
     }
-    if (doc.containsKey("vf")) {
+    if (doc.containsKey("vf"))
+    {
         _verificationFlag = doc["vf"].as<int>();
     }
 
@@ -416,23 +485,27 @@ Inits::Inits(const String &jsonPayload) {
 }
 
 // DeviceStates constructor — parses ds JSON automatically
-DeviceStates::DeviceStates(const String &jsonPayload) {
+DeviceStates::DeviceStates(const String &jsonPayload)
+{
     _valid = false;
     _state = "";
     _rawPayload = jsonPayload;
 
     StaticJsonDocument<256> doc;
     DeserializationError error = deserializeJson(doc, jsonPayload);
-    if (error) return;
+    if (error)
+        return;
 
-    if (doc.containsKey("s")) {
+    if (doc.containsKey("s"))
+    {
         _state = doc["s"].as<String>();
         _valid = true;
     }
 }
 
 // Usages constructor — parses ur, le, or nl JSON automatically
-Usages::Usages(const String &jsonPayload) {
+Usages::Usages(const String &jsonPayload)
+{
     _valid = false;
     _used = 0;
     _limit = 0;
@@ -446,79 +519,103 @@ Usages::Usages(const String &jsonPayload) {
 
     StaticJsonDocument<512> doc;
     DeserializationError error = deserializeJson(doc, jsonPayload);
-    if (error) return;
+    if (error)
+        return;
 
-    if (doc.containsKey("u")) {
+    if (doc.containsKey("u"))
+    {
         _used = doc["u"].as<int>();
     }
-    if (doc.containsKey("l")) {
+    if (doc.containsKey("l"))
+    {
         _limit = doc["l"].as<int>();
     }
-    if (doc.containsKey("r")) {
+    if (doc.containsKey("r"))
+    {
         _remaining = doc["r"].as<int>();
     }
-    if (doc.containsKey("pct")) {
+    if (doc.containsKey("pct"))
+    {
         _percentage = doc["pct"].as<int>();
     }
-    if (doc.containsKey("ra")) {
+    if (doc.containsKey("ra"))
+    {
         _resetAt = doc["ra"].as<String>();
     }
-    if (doc.containsKey("g")) {
+    if (doc.containsKey("g"))
+    {
         _granularity = doc["g"].as<String>();
     }
 
     _valid = doc.containsKey("u") || doc.containsKey("l");
 }
 
-void Firmngin::setupLWT() {
+void Firmngin::setupLWT()
+{
     String willTopic = "/d/" + String(_deviceId) + "/lwt";
     _Debug("LWT: " + willTopic);
 }
 
-void Firmngin::loop() {
-    if (!PLATFORM_SUPPORTED || WiFi.status() != WL_CONNECTED) return;
+void Firmngin::loop()
+{
+    if (!PLATFORM_SUPPORTED || WiFi.status() != WL_CONNECTED)
+        return;
 
     static unsigned long lastReconnectAttempt = 0;
     static int backoffDelay = 5000;
     static bool firstConnect = true;
 
-    if (!_mqttClient.connected()) {
+    if (!_mqttClient.connected())
+    {
         unsigned long now = millis();
-        if (now - lastReconnectAttempt > backoffDelay) {
+        if (now - lastReconnectAttempt > backoffDelay)
+        {
             lastReconnectAttempt = now;
             backoffDelay = min(backoffDelay * 2, 60000);
-            if (connectServer()) {
+            if (connectServer())
+            {
                 backoffDelay = 5000;
                 firstConnect = false;
             }
         }
-    } else {
+    }
+    else
+    {
         _mqttClient.loop();
     }
 }
 
-void Firmngin::_Debug(String message, bool newLine) {
-    if (_debug) {
-        if (newLine) Serial.println(message);
-        else Serial.print(message);
+void Firmngin::_Debug(String message, bool newLine)
+{
+    if (_debug)
+    {
+        if (newLine)
+            Serial.println(message);
+        else
+            Serial.print(message);
     }
 }
 
-void Firmngin::setDebug(bool debug) {
+void Firmngin::setDebug(bool debug)
+{
     _debug = debug;
 }
 
-bool Firmngin::isPlatformSupported() {
+bool Firmngin::isPlatformSupported()
+{
     return PLATFORM_SUPPORTED;
 }
 
-bool Firmngin::connectServer() {
+bool Firmngin::connectServer()
+{
     setupLWT();
-    
+
     int retryCount = 0;
-    while (!_mqttClient.connected() && retryCount < maxRetryMQTT) {
+    while (!_mqttClient.connected() && retryCount < maxRetryMQTT)
+    {
         unsigned long now = millis();
-        if (now - _lastMQTTAttempt >= _delayRetryMQTT) {
+        if (now - _lastMQTTAttempt >= _delayRetryMQTT)
+        {
             _lastMQTTAttempt = now;
             Serial.print("Connecting to MQTT (");
             Serial.print(retryCount + 1);
@@ -526,10 +623,11 @@ bool Firmngin::connectServer() {
 
             String willTopic = "/d/" + String(_deviceId) + "/lwt";
             String willMessage = "0";
-            
+
             bool connected = _mqttClient.connect(_deviceId, willTopic.c_str(), 1, true, willMessage.c_str());
 
-            if (connected) {
+            if (connected)
+            {
                 _mqttClient.subscribe(getPathPayment(_deviceId).c_str(), defaultQos);
                 _mqttClient.subscribe(getPathDeviceStatus(_deviceId).c_str(), defaultQos);
                 _mqttClient.subscribe(getPathPendingPayment(_deviceId).c_str(), defaultQos);
@@ -548,7 +646,9 @@ bool Firmngin::connectServer() {
 
                 Serial.println("Connected!");
                 return true;
-            } else {
+            }
+            else
+            {
                 Serial.print("Failed, rc=");
                 Serial.println(_mqttClient.state());
                 retryCount++;
@@ -556,23 +656,27 @@ bool Firmngin::connectServer() {
         }
     }
 
-    if (!_mqttClient.connected()) {
+    if (!_mqttClient.connected())
+    {
         Serial.println("Connection failed, restarting...");
         delay(1000);
         ESP.restart();
     }
-    
+
     return false;
 }
 
-void Firmngin::mqttCallback(char *topic, byte *payload, unsigned int length) {
+void Firmngin::mqttCallback(char *topic, byte *payload, unsigned int length)
+{
     String payloadStr;
     payloadStr.reserve(length);
-    for (unsigned int i = 0; i < length; i++) {
+    for (unsigned int i = 0; i < length; i++)
+    {
         payloadStr += (char)payload[i];
     }
 
-    if (_debug) {
+    if (_debug)
+    {
         Serial.print("[");
         Serial.print(topic);
         Serial.print("]: ");
@@ -581,75 +685,92 @@ void Firmngin::mqttCallback(char *topic, byte *payload, unsigned int length) {
 
     String topicStr = String(topic);
     String stateType = "";
-    
+
     int lastSlash = topicStr.lastIndexOf('/');
-    if (lastSlash >= 0) {
+    if (lastSlash >= 0)
+    {
         stateType = topicStr.substring(lastSlash + 1);
     }
 
     DeviceState state(stateType, payloadStr);
 
-    if (_callbacks.count(stateType) > 0) {
+    if (_callbacks.count(stateType) > 0)
+    {
         _callbacks[stateType](state);
     }
 
     // Typed callbacks — auto-parse, no manual JSON needed
-    if ((stateType == "dpin" || stateType == "vr") && _verificationCallback) {
+    if ((stateType == "dpin" || stateType == "vr") && _verificationCallback)
+    {
         Verifications v(payloadStr);
-        if (v.isValid()) {
+        if (v.isValid())
+        {
             _verificationCallback(v);
         }
     }
 
-    if ((stateType == "pp" || stateType == "pm") && _paymentsCallback) {
+    if ((stateType == "pp" || stateType == "pm") && _paymentsCallback)
+    {
         Payments p(payloadStr);
-        if (p.isValid()) {
+        if (p.isValid())
+        {
             p.setPending(stateType == "pp");
             p.setSuccess(stateType == "pm");
             _paymentsCallback(p);
         }
     }
 
-    if ((stateType == "ur" || stateType == "le" || stateType == "nl") && _usagesCallback) {
+    if ((stateType == "ur" || stateType == "le" || stateType == "nl") && _usagesCallback)
+    {
         Usages u(payloadStr);
-        if (u.isValid()) {
+        if (u.isValid())
+        {
             u.setNearLimit(stateType == "nl");
             u.setLimitExceeded(stateType == "le");
             _usagesCallback(u);
         }
     }
 
-    if (stateType == "ds" && _deviceStateCallback) {
+    if (stateType == "ds" && _deviceStateCallback)
+    {
         DeviceStates ds(payloadStr);
-        if (ds.isValid()) {
+        if (ds.isValid())
+        {
             _deviceStateCallback(ds);
         }
     }
 
-    if (stateType == "init" && _initCallback) {
+    if (stateType == "init" && _initCallback)
+    {
         Inits i(payloadStr);
-        if (i.isValid()) {
+        if (i.isValid())
+        {
             _initCallback(i);
         }
     }
 
-    // Entity commands from backend → device via /d/{id}/rs/{key}
-    if (topicStr.indexOf("/rs/") >= 0) {
+    if (topicStr.indexOf("/rs/") >= 0)
+    {
         int rsIndex = topicStr.indexOf("/rs/");
         String entityKey = topicStr.substring(rsIndex + 4); // after "/rs/"
         EntityCommand cmd(entityKey, payloadStr);
 
         // Check per-key callback first, fallback to global ENTITIES callback
-        if (_entityCallbacks.count(entityKey) > 0) {
+        if (_entityCallbacks.count(entityKey) > 0)
+        {
             _entityCallbacks[entityKey](cmd);
-        } else if (_entityCallback) {
+        }
+        else if (_entityCallback)
+        {
             _entityCallback(cmd);
         }
     }
 }
 
-bool Firmngin::pushEntity(const char* key, const char* value) {
-    if (!_mqttClient.connected()) return false;
+bool Firmngin::pushEntity(const char *key, const char *value)
+{
+    if (!_mqttClient.connected())
+        return false;
 
     StaticJsonDocument<256> doc;
     doc["key"] = key;
@@ -661,26 +782,34 @@ bool Firmngin::pushEntity(const char* key, const char* value) {
     return _mqttClient.publish(getTopicUpdateEntity(_deviceId).c_str(), payload.c_str());
 }
 
-bool Firmngin::pushEntity(Entity &entity, const char* value) {
+bool Firmngin::pushEntity(Entity &entity, const char *value)
+{
     return pushEntity(entity.key().c_str(), value);
 }
 
-bool Firmngin::updateEntities(const char* jsonPayload) {
-    if (!_mqttClient.connected()) return false;
+bool Firmngin::updateEntities(const char *jsonPayload)
+{
+    if (!_mqttClient.connected())
+        return false;
     return _mqttClient.publish(getTopicUpdateEntities(_deviceId).c_str(), jsonPayload);
 }
 
-bool Firmngin::requestInit() {
-    if (!_mqttClient.connected()) return false;
+bool Firmngin::requestInit()
+{
+    if (!_mqttClient.connected())
+        return false;
     return _mqttClient.publish(getTopicRequestInit(_deviceId).c_str(), "{}");
 }
 
-BatchState Firmngin::pushBatchEntities() {
+BatchState Firmngin::pushBatchEntities()
+{
     return BatchState(this);
 }
 
-bool BatchState::send() {
-    if (_instance == nullptr) return false;
+bool BatchState::send()
+{
+    if (_instance == nullptr)
+        return false;
     String payload;
     serializeJson(_doc, payload);
     return _instance->updateEntities(payload.c_str());
