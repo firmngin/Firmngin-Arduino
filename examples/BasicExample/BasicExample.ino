@@ -4,6 +4,13 @@
  * This example shows basic usage of DeviceState API with manual JSON parsing.
  * For mTLS authentication, create your own keys.h file with certificates.
  *
+ * Setup:
+ * 1. Generate keys.h from firmngin dashboard or cert-gen API
+ * 2. Copy keys.h to this sketch folder
+ * 3. Choose validation mode in keys.h:
+ *    - #define USE_CA_CERT     (recommended for ESP32)
+ *    - #define USE_FINGERPRINT (recommended for ESP8266)
+ *
  * See README.md for complete setup instructions.
  */
 
@@ -99,7 +106,7 @@ void setupStates()
   fngin.on(PENDING_PAYMENT, [](DeviceState state) {
     Serial.println("Pending payment notification received");
     String payload = state.getPayload();
-    DynamicJsonDocument doc(1024);
+    JsonDocument doc;
     deserializeJson(doc, payload);
     Serial.print("  Item:  "); Serial.println(doc["it"].as<String>());
     Serial.print("  Price: "); Serial.println(doc["pc"].as<String>());
@@ -157,18 +164,18 @@ void setupStates()
     Serial.println("Display PIN command received");
     String payload = state.getPayload();
     
-    DynamicJsonDocument doc(512);
+    JsonDocument doc;
     DeserializationError error = deserializeJson(doc, payload);
     if (!error) {
-      if (doc.containsKey("pi")) {
+      if (doc["pi"].is<const char *>()) {
         Serial.print("PIN: ");
         Serial.println(doc["pi"].as<String>());
       }
-      if (doc.containsKey("si")) {
+      if (doc["si"].is<const char *>()) {
         Serial.print("Session ID: ");
         Serial.println(doc["si"].as<String>());
       }
-      if (doc.containsKey("ttl")) {
+      if (doc["ttl"].is<int>()) {
         Serial.print("TTL: ");
         Serial.println(doc["ttl"].as<int>());
       }
@@ -180,7 +187,7 @@ void setupStates()
     Serial.println("Verification result received");
     String payload = state.getPayload();
     
-    DynamicJsonDocument doc(256);
+    JsonDocument doc;
     DeserializationError error = deserializeJson(doc, payload);
     if (!error) {
       bool pinMet = doc["pn"] | false;
@@ -197,18 +204,18 @@ void setupStates()
     Serial.println("Usage response received");
     String payload = state.getPayload();
     
-    DynamicJsonDocument doc(512);
+    JsonDocument doc;
     DeserializationError error = deserializeJson(doc, payload);
     if (!error) {
-      if (doc.containsKey("u")) {
+      if (doc["u"].is<int>()) {
         Serial.print("Used: ");
         Serial.println(doc["u"].as<int>());
       }
-      if (doc.containsKey("l")) {
+      if (doc["l"].is<int>()) {
         Serial.print("Limit: ");
         Serial.println(doc["l"].as<int>());
       }
-      if (doc.containsKey("pct")) {
+      if (doc["pct"].is<int>()) {
         Serial.print("Percentage: ");
         Serial.println(doc["pct"].as<int>());
       }

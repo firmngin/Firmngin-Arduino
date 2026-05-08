@@ -23,7 +23,7 @@ Add to your `platformio.ini`:
 
 ```ini
 lib_deps =
-    bblanchon/ArduinoJson @ ^6.21.3
+    bblanchon/ArduinoJson @ ^7.4.3
     knolleary/PubSubClient @ ^2.8.0
 ```
 
@@ -104,14 +104,30 @@ Create a `keys.h` file next to your sketch (do **not** commit this file).
 
 You can download your device's `keys.h` directly from the **Firmngin Dashboard** → Devices → your device → Download `keys.h`.
 
-If you prefer to create it manually, use the following template:
+### Server Validation Modes
+
+Choose how the device validates the MQTT broker's identity:
+
+| Mode | Define | Best For | Pros | Cons |
+|------|--------|----------|------|------|
+| **CA Certificate** | `USE_CA_CERT` | ESP32, Production | Full chain validation, auto-renew safe | Uses more memory |
+| **Fingerprint** | `USE_FINGERPRINT` | ESP8266, Prototypes | Lightweight, memory efficient | Must update if server cert changes |
+
+If you want the server to renew freely without touching the client, use `USE_CA_CERT` and keep the Root CA stable. Only fingerprint mode requires client regeneration when the server certificate changes.
+
+### Using `keys.h` Template
 
 ```cpp
 #ifndef KEYS_H
 #define KEYS_H
 
-static const char* mqtt_server = "asia-jkt1.firmngin.dev";
-static const int mqtt_port = 8883;
+// Choose ONE validation mode:
+// #define USE_CA_CERT       // Recommended for ESP32
+// #define USE_FINGERPRINT   // Recommended for ESP8266
+
+// Optional. If omitted, the library uses asia-jkt1.firmngin.dev:8883.
+// #define FIRMNGIN_SERVER_ADDR "asia-jkt1.firmngin.dev"
+// #define FIRMNGIN_SERVER_PORT 8883
 
 static const char CA_CERT[] PROGMEM = R"EOF(
 -----BEGIN CERTIFICATE-----

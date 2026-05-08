@@ -17,7 +17,7 @@
     "frameworks": ["arduino"],
     "platforms": ["espressif8266", "espressif32"],
     "dependencies": {
-        "bblanchon/ArduinoJson": "^6.21.3",
+        "bblanchon/ArduinoJson": "^7.4.3",
         "knolleary/PubSubClient": "^2.8.0"
     }
 }
