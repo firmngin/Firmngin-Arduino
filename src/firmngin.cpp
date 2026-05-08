@@ -282,17 +282,9 @@ void Firmngin::begin()
     const char *privateKey = _privateKey;
 
 #if KEYS_H_AVAILABLE
-#if defined(USE_CA_CERT)
+    // ESP32: Always use CA cert mode (fingerprint not supported in newer ESP32 cores)
     if (caCert == nullptr)
         caCert = CA_CERT;
-#elif defined(USE_FINGERPRINT)
-    if (_fingerprint == nullptr)
-        _fingerprint = SERVER_FINGERPRINT_BYTES;
-#else
-    // Default: CA cert for ESP32
-    if (caCert == nullptr)
-        caCert = CA_CERT;
-#endif
     if (clientCert == nullptr)
         clientCert = CLIENT_CERT;
     if (privateKey == nullptr)
@@ -310,19 +302,16 @@ void Firmngin::begin()
         _wifiClient.setInsecure();
         Serial.println("⚠️  Server validation: DISABLED (setInsecure)");
     }
-#if defined(USE_FINGERPRINT) && KEYS_H_AVAILABLE
-    else if (_fingerprint != nullptr)
-    {
-        _wifiClient.setFingerprint(_fingerprint);
-        Serial.println("🔒 Server validation: Fingerprint (USE_FINGERPRINT)");
-    }
-#else
     else if (caCert != nullptr)
     {
         _wifiClient.setCACert(caCert);
-        Serial.println("🔒 Server validation: CA Certificate (USE_CA_CERT)");
+        Serial.println("🔒 Server validation: CA Certificate");
     }
-#endif
+    else
+    {
+        _wifiClient.setInsecure();
+        Serial.println("⚠️  Server validation: DISABLED (no CA cert)");
+    }
     _wifiClient.setCertificate(clientCert);
     _wifiClient.setPrivateKey(privateKey);
 #endif
