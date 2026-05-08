@@ -4,25 +4,19 @@ const char *NTP_SERVER = "pool.ntp.org";
 int GMT_OFFSET_SEC = 7 * 3600;
 int DAYLIGHT_OFFSET_SEC = 0;
 
-// Use mqtt_server from keys.h if available, otherwise use default from header
-#if KEYS_H_AVAILABLE
-const char *MQTT_SERVER_ADDR = mqtt_server;
-const int MQTT_SERVER_PORT = mqtt_port;
-#else
-const char *MQTT_SERVER_ADDR = DEFAULT_MQTT_SERVER;
-const int MQTT_SERVER_PORT = DEFAULT_MQTT_PORT;
-#endif
+const char *MQTT_SERVER_ADDR = FIRMNGIN_SERVER_ADDR;
+const int MQTT_SERVER_PORT = FIRMNGIN_SERVER_PORT;
 
 #if defined(ESP8266)
 Firmngin::Firmngin(const char *deviceId, const char *deviceKey)
     : _deviceId(deviceId),
+      _deviceKey(deviceKey),
       _debug(false),
       _lastMQTTAttempt(0),
       _mqttClient(_wifiClient),
       _mqttServer(MQTT_SERVER_ADDR),
       _mqttPort(MQTT_SERVER_PORT)
 {
-    (void)deviceKey;
     if (!PLATFORM_SUPPORTED)
     {
         Serial.println("ERROR: Platform not supported");
@@ -31,6 +25,7 @@ Firmngin::Firmngin(const char *deviceId, const char *deviceKey)
 
 Firmngin::Firmngin(const char *deviceId, const char *deviceKey, const char *clientCert, const char *privateKey, const uint8_t *fingerprint)
     : _deviceId(deviceId),
+      _deviceKey(deviceKey),
       _debug(false),
       _lastMQTTAttempt(0),
       _mqttClient(_wifiClient),
@@ -40,7 +35,6 @@ Firmngin::Firmngin(const char *deviceId, const char *deviceKey, const char *clie
       _privateKey(privateKey),
       _fingerprint(fingerprint)
 {
-    (void)deviceKey;
     if (!PLATFORM_SUPPORTED)
     {
         Serial.println("ERROR: Platform not supported");
@@ -49,13 +43,13 @@ Firmngin::Firmngin(const char *deviceId, const char *deviceKey, const char *clie
 #elif defined(ESP32)
 Firmngin::Firmngin(const char *deviceId, const char *deviceKey)
     : _deviceId(deviceId),
+      _deviceKey(deviceKey),
       _debug(false),
       _lastMQTTAttempt(0),
       _mqttClient(_wifiClient),
       _mqttServer(MQTT_SERVER_ADDR),
       _mqttPort(MQTT_SERVER_PORT)
 {
-    (void)deviceKey;
     if (!PLATFORM_SUPPORTED)
     {
         Serial.println("ERROR: Platform not supported");
@@ -64,6 +58,7 @@ Firmngin::Firmngin(const char *deviceId, const char *deviceKey)
 
 Firmngin::Firmngin(const char *deviceId, const char *deviceKey, const char *caCert, const char *clientCert, const char *privateKey)
     : _deviceId(deviceId),
+      _deviceKey(deviceKey),
       _debug(false),
       _lastMQTTAttempt(0),
       _mqttClient(_wifiClient),
@@ -74,7 +69,6 @@ Firmngin::Firmngin(const char *deviceId, const char *deviceKey, const char *caCe
       _privateKey(privateKey),
       _fingerprint(nullptr)
 {
-    (void)deviceKey;
     if (!PLATFORM_SUPPORTED)
     {
         Serial.println("ERROR: Platform not supported");
@@ -83,6 +77,7 @@ Firmngin::Firmngin(const char *deviceId, const char *deviceKey, const char *caCe
 
 Firmngin::Firmngin(const char *deviceId, const char *deviceKey, const uint8_t *fingerprint, const char *clientCert, const char *privateKey)
     : _deviceId(deviceId),
+      _deviceKey(deviceKey),
       _debug(false),
       _lastMQTTAttempt(0),
       _mqttClient(_wifiClient),
@@ -93,7 +88,6 @@ Firmngin::Firmngin(const char *deviceId, const char *deviceKey, const uint8_t *f
       _privateKey(privateKey),
       _fingerprint(fingerprint)
 {
-    (void)deviceKey;
     if (!PLATFORM_SUPPORTED)
     {
         Serial.println("ERROR: Platform not supported");
@@ -102,13 +96,13 @@ Firmngin::Firmngin(const char *deviceId, const char *deviceKey, const uint8_t *f
 #else
 Firmngin::Firmngin(const char *deviceId, const char *deviceKey)
     : _deviceId(deviceId),
+      _deviceKey(deviceKey),
       _debug(false),
       _lastMQTTAttempt(0),
       _mqttClient(_wifiClient),
       _mqttServer(MQTT_SERVER_ADDR),
       _mqttPort(MQTT_SERVER_PORT)
 {
-    (void)deviceKey;
     if (!PLATFORM_SUPPORTED)
     {
         Serial.println("ERROR: Platform not supported");
@@ -204,6 +198,22 @@ String Firmngin::getTopicEntityCommand(String deviceId)
     return String("/d/") + deviceId + "/rs/+";
 }
 
+static void printBanner()
+{
+    Serial.println();
+    Serial.println(F("   __             _            _            "));
+    Serial.println(F("  / _|           (_)          | |           "));
+    Serial.println(F(" | |_ _ __   __ _ _ _ __    __| | _____   __"));
+    Serial.println(F(" |  _| '_ \\ / _' | | '_ \\  / _' |/ _ \\ \\ / /"));
+    Serial.println(F(" | | | | | | (_| | | | | || (_| |  __/\\ V / "));
+    Serial.println(F(" |_| |_| |_|\\__, |_|_| |_(_)__,_|\\___| \\_/  "));
+    Serial.println(F("             __/ |                          "));
+    Serial.println(F("            |___/                           "));
+    Serial.println();
+    Serial.println(F("firmngin.dev AIoT Platform    "));
+    Serial.println();
+}
+
 void Firmngin::begin()
 {
     if (!PLATFORM_SUPPORTED)
@@ -219,6 +229,8 @@ void Firmngin::begin()
 
     syncTime();
 
+    printBanner();
+
 #if defined(ESP8266)
     const char *clientCert = _clientCert;
     const char *privateKey = _privateKey;
@@ -229,11 +241,20 @@ void Firmngin::begin()
         clientCert = CLIENT_CERT;
     if (privateKey == nullptr)
         privateKey = PRIVATE_KEY;
+#if defined(USE_FINGERPRINT)
+    if (fingerprint == nullptr)
+        fingerprint = SERVER_FINGERPRINT_BYTES;
+#elif defined(USE_CA_CERT)
+    // ESP8266 CA cert mode: use trust anchors (memory heavy but possible)
+    // Note: user must define USE_CA_CERT in keys.h or sketch
+#else
+    // Default: fingerprint
     if (fingerprint == nullptr)
         fingerprint = SERVER_FINGERPRINT_BYTES;
 #endif
+#endif
 
-    if (clientCert == nullptr || privateKey == nullptr || fingerprint == nullptr)
+    if (clientCert == nullptr || privateKey == nullptr)
     {
         Serial.println("ERROR: mTLS credentials not configured");
         return;
@@ -243,15 +264,35 @@ void Firmngin::begin()
     _clientPrivKey = new BearSSL::PrivateKey(privateKey);
     _wifiClient.setClientRSACert(_clientCertList, _clientPrivKey);
     _wifiClient.setBufferSizes(512, 512);
+
+#if defined(USE_CA_CERT) && KEYS_H_AVAILABLE
+    _wifiClient.setTrustAnchors(new BearSSL::X509List(CA_CERT));
+    Serial.println("🔒 Server validation: CA Certificate (USE_CA_CERT)");
+#elif fingerprint != nullptr
     _wifiClient.setFingerprint(fingerprint);
+    Serial.println("🔒 Server validation: Fingerprint");
+#else
+    Serial.println("ERROR: No server validation method configured");
+    return;
+#endif
+
 #elif defined(ESP32)
     const char *caCert = _caCert;
     const char *clientCert = _clientCert;
     const char *privateKey = _privateKey;
 
 #if KEYS_H_AVAILABLE
+#if defined(USE_CA_CERT)
     if (caCert == nullptr)
         caCert = CA_CERT;
+#elif defined(USE_FINGERPRINT)
+    if (_fingerprint == nullptr)
+        _fingerprint = SERVER_FINGERPRINT_BYTES;
+#else
+    // Default: CA cert for ESP32
+    if (caCert == nullptr)
+        caCert = CA_CERT;
+#endif
     if (clientCert == nullptr)
         clientCert = CLIENT_CERT;
     if (privateKey == nullptr)
@@ -264,10 +305,24 @@ void Firmngin::begin()
         return;
     }
 
-    if (caCert != nullptr)
+    if (_insecure)
+    {
+        _wifiClient.setInsecure();
+        Serial.println("⚠️  Server validation: DISABLED (setInsecure)");
+    }
+#if defined(USE_FINGERPRINT) && KEYS_H_AVAILABLE
+    else if (_fingerprint != nullptr)
+    {
+        _wifiClient.setFingerprint(_fingerprint);
+        Serial.println("🔒 Server validation: Fingerprint (USE_FINGERPRINT)");
+    }
+#else
+    else if (caCert != nullptr)
     {
         _wifiClient.setCACert(caCert);
+        Serial.println("🔒 Server validation: CA Certificate (USE_CA_CERT)");
     }
+#endif
     _wifiClient.setCertificate(clientCert);
     _wifiClient.setPrivateKey(privateKey);
 #endif
@@ -289,6 +344,11 @@ void Firmngin::setMQTTServer(const char *server, int port)
 {
     _mqttServer = server;
     _mqttPort = port;
+}
+
+void Firmngin::setInsecure(bool insecure)
+{
+    _insecure = insecure;
 }
 
 void Firmngin::setTimezone(int timezone)
@@ -359,36 +419,36 @@ Verifications::Verifications(const String &jsonPayload)
     _preconditionMet = false;
     _rawPayload = jsonPayload;
 
-    StaticJsonDocument<512> doc;
+    JsonDocument doc;
     DeserializationError error = deserializeJson(doc, jsonPayload);
     if (error)
         return;
 
     // dpin fields
-    if (doc.containsKey("pi"))
+    if (doc["pi"].is<const char *>())
     {
         _pin = doc["pi"].as<String>();
     }
-    if (doc.containsKey("si"))
+    if (doc["si"].is<const char *>())
     {
         _sessionId = doc["si"].as<String>();
     }
-    if (doc.containsKey("ttl"))
+    if (doc["ttl"].is<int>())
     {
         _ttl = doc["ttl"].as<int>();
     }
 
     // vr fields
-    if (doc.containsKey("pn"))
+    if (doc["pn"].is<bool>())
     {
         _pinMet = doc["pn"].as<bool>();
     }
-    if (doc.containsKey("pr"))
+    if (doc["pr"].is<bool>())
     {
         _preconditionMet = doc["pr"].as<bool>();
     }
 
-    _valid = _pin.length() > 0 || doc.containsKey("pn");
+    _valid = _pin.length() > 0 || doc["pn"].is<bool>();
 }
 
 // Payments constructor — parses pp or pm JSON automatically
@@ -402,20 +462,20 @@ Payments::Payments(const String &jsonPayload)
     _isSuccess = false;
     _rawPayload = jsonPayload;
 
-    StaticJsonDocument<512> doc;
+    JsonDocument doc;
     DeserializationError error = deserializeJson(doc, jsonPayload);
     if (error)
         return;
 
-    if (doc.containsKey("it"))
+    if (doc["it"].is<const char *>())
     {
         _itemTitle = doc["it"].as<String>();
     }
-    if (doc.containsKey("pc"))
+    if (doc["pc"].is<const char *>())
     {
         _price = doc["pc"].as<String>();
     }
-    if (doc.containsKey("oid"))
+    if (doc["oid"].is<const char *>())
     {
         _orderId = doc["oid"].as<String>();
     }
@@ -461,27 +521,27 @@ Inits::Inits(const String &jsonPayload)
     _verificationFlag = 0;
     _rawPayload = jsonPayload;
 
-    StaticJsonDocument<2048> doc;
+    JsonDocument doc;
     DeserializationError error = deserializeJson(doc, jsonPayload);
     if (error)
         return;
 
-    if (doc.containsKey("e"))
+    if (doc["e"].is<JsonArray>() || doc["e"].is<JsonObject>())
     {
         String entitiesStr;
         serializeJson(doc["e"], entitiesStr);
         _entitiesJson = entitiesStr;
     }
-    if (doc.containsKey("m"))
+    if (doc["m"].is<const char *>())
     {
         _merchantStatus = doc["m"].as<String>();
     }
-    if (doc.containsKey("vf"))
+    if (doc["vf"].is<int>())
     {
         _verificationFlag = doc["vf"].as<int>();
     }
 
-    _valid = doc.containsKey("m");
+    _valid = doc["m"].is<const char *>();
 }
 
 // DeviceStates constructor — parses ds JSON automatically
@@ -491,12 +551,12 @@ DeviceStates::DeviceStates(const String &jsonPayload)
     _state = "";
     _rawPayload = jsonPayload;
 
-    StaticJsonDocument<256> doc;
+    JsonDocument doc;
     DeserializationError error = deserializeJson(doc, jsonPayload);
     if (error)
         return;
 
-    if (doc.containsKey("s"))
+    if (doc["s"].is<const char *>())
     {
         _state = doc["s"].as<String>();
         _valid = true;
@@ -517,37 +577,37 @@ Usages::Usages(const String &jsonPayload)
     _isLimitExceeded = false;
     _rawPayload = jsonPayload;
 
-    StaticJsonDocument<512> doc;
+    JsonDocument doc;
     DeserializationError error = deserializeJson(doc, jsonPayload);
     if (error)
         return;
 
-    if (doc.containsKey("u"))
+    if (doc["u"].is<int>())
     {
         _used = doc["u"].as<int>();
     }
-    if (doc.containsKey("l"))
+    if (doc["l"].is<int>())
     {
         _limit = doc["l"].as<int>();
     }
-    if (doc.containsKey("r"))
+    if (doc["r"].is<int>())
     {
         _remaining = doc["r"].as<int>();
     }
-    if (doc.containsKey("pct"))
+    if (doc["pct"].is<int>())
     {
         _percentage = doc["pct"].as<int>();
     }
-    if (doc.containsKey("ra"))
+    if (doc["ra"].is<const char *>())
     {
         _resetAt = doc["ra"].as<String>();
     }
-    if (doc.containsKey("g"))
+    if (doc["g"].is<const char *>())
     {
         _granularity = doc["g"].as<String>();
     }
 
-    _valid = doc.containsKey("u") || doc.containsKey("l");
+    _valid = doc["u"].is<int>() || doc["l"].is<int>();
 }
 
 void Firmngin::setupLWT()
@@ -624,7 +684,8 @@ bool Firmngin::connectServer()
             String willTopic = "/d/" + String(_deviceId) + "/lwt";
             String willMessage = "0";
 
-            bool connected = _mqttClient.connect(_deviceId, willTopic.c_str(), 1, true, willMessage.c_str());
+            _mqttClient.disconnect();
+            bool connected = _mqttClient.connect(_deviceId, _deviceId, _deviceKey, willTopic.c_str(), 1, true, willMessage.c_str());
 
             if (connected)
             {
@@ -642,6 +703,8 @@ bool Firmngin::connectServer()
                 _mqttClient.subscribe(getTopicNearLimit(_deviceId).c_str(), defaultQos);
                 _mqttClient.subscribe(getTopicEntityCommand(_deviceId).c_str(), defaultQos);
 
+                _mqttClient.publish(willTopic.c_str(), "", true);
+                delay(10);
                 _mqttClient.publish(willTopic.c_str(), "1", true);
 
                 Serial.println("Connected!");
@@ -649,8 +712,48 @@ bool Firmngin::connectServer()
             }
             else
             {
+                int mqttState = _mqttClient.state();
                 Serial.print("Failed, rc=");
-                Serial.println(_mqttClient.state());
+                Serial.print(mqttState);
+                if (_debug)
+                {
+                    Serial.print(" (");
+                    switch (mqttState)
+                    {
+                    case -4:
+                        Serial.print("MQTT_CONNECTION_TIMEOUT");
+                        break;
+                    case -3:
+                        Serial.print("MQTT_CONNECTION_LOST");
+                        break;
+                    case -2:
+                        Serial.print("MQTT_CONNECT_FAILED - TLS/certificate error");
+                        break;
+                    case -1:
+                        Serial.print("MQTT_DISCONNECTED");
+                        break;
+                    case 1:
+                        Serial.print("MQTT_CONNECT_BAD_PROTOCOL");
+                        break;
+                    case 2:
+                        Serial.print("MQTT_CONNECT_BAD_CLIENT_ID");
+                        break;
+                    case 3:
+                        Serial.print("MQTT_CONNECT_UNAVAILABLE");
+                        break;
+                    case 4:
+                        Serial.print("MQTT_CONNECT_BAD_CREDENTIALS");
+                        break;
+                    case 5:
+                        Serial.print("MQTT_CONNECT_UNAUTHORIZED");
+                        break;
+                    default:
+                        Serial.print("UNKNOWN");
+                        break;
+                    }
+                    Serial.print(")");
+                }
+                Serial.println();
                 retryCount++;
             }
         }
@@ -772,7 +875,7 @@ bool Firmngin::pushEntity(const char *key, const char *value)
     if (!_mqttClient.connected())
         return false;
 
-    StaticJsonDocument<256> doc;
+    JsonDocument doc;
     doc["key"] = key;
     doc["value"] = value;
 

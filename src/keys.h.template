@@ -4,20 +4,43 @@
 // INSTRUCTIONS:
 // 1. Copy this file to your sketch folder (same folder as your .ino file)
 // 2. Rename it to "keys.h"
-// 3. Fill in your certificates and credentials
-// 4. DO NOT commit keys.h to version control!
+// 3. Choose validation mode by uncommenting one of the defines below
+// 4. Fill in your certificates and credentials
+// 5. DO NOT commit keys.h to version control!
 // =========================================================================
 
 #ifndef KEYS_H
 #define KEYS_H
 
-// MQTT Server Configuration (Optional - override default from library)
+// =========================================================================
+// CHOOSE VALIDATION MODE (uncomment ONE):
+// =========================================================================
+
+// Mode 1: CA Certificate — Full chain validation
+// Recommended for: ESP32, Production environments
+// Pros: Highest security, auto-renew safe, supports CRL revocation
+// Cons: Uses more memory
+// #define USE_CA_CERT
+
+// Mode 2: Fingerprint — SHA1 server validation
+// Recommended for: ESP8266, Prototypes
+// Pros: Lightweight, memory efficient
+// Cons: Must update if server certificate changes
+// #define USE_FINGERPRINT
+
+// =========================================================================
+// MQTT SERVER CONFIGURATION (Optional)
+// =========================================================================
 // Default: asia-jkt1.firmngin.dev:8883
 // Uncomment to use custom server:
-// static const char* mqtt_server = "your-custom-server.com";
-// static const int mqtt_port = 8883;
+// #define FIRMNGIN_SERVER_ADDR "your-custom-server.com"
+// #define FIRMNGIN_SERVER_PORT 8883
 
-// CA Certificate (PEM format) - For server validation
+// =========================================================================
+// CERTIFICATES (Required for all modes)
+// =========================================================================
+
+// CA Certificate (PEM format) - Used when USE_CA_CERT is defined
 static const char CA_CERT[] PROGMEM = R"EOF(
 -----BEGIN CERTIFICATE-----
 [Your CA Certificate Here]
@@ -38,7 +61,7 @@ static const char PRIVATE_KEY[] PROGMEM = R"EOF(
 -----END PRIVATE KEY-----
 )EOF";
 
-// Server Fingerprint (SHA1 - 20 bytes) - For ESP8266 server validation
+// Server Fingerprint (SHA1 - 20 bytes) - Used when USE_FINGERPRINT is defined
 static const uint8_t SERVER_FINGERPRINT_BYTES[20] PROGMEM = {
   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00

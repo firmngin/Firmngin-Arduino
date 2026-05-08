@@ -36,6 +36,14 @@
 #define KEYS_H_AVAILABLE 0
 #endif
 
+#ifndef FIRMNGIN_SERVER_ADDR
+#define FIRMNGIN_SERVER_ADDR DEFAULT_MQTT_SERVER
+#endif
+
+#ifndef FIRMNGIN_SERVER_PORT
+#define FIRMNGIN_SERVER_PORT DEFAULT_MQTT_PORT
+#endif
+
 #define OK "on_ok"
 
 #define PATH_PAYMENT "pm"
@@ -319,33 +327,18 @@ class BatchState
 {
 private:
     Firmngin *_instance;
-#if ARDUINOJSON_VERSION_MAJOR >= 7
     JsonDocument _doc;
-#else
-    DynamicJsonDocument _doc;
-#endif
     JsonArray _array;
 
 public:
-#if ARDUINOJSON_VERSION_MAJOR >= 7
     BatchState(Firmngin *instance) : _instance(instance)
     {
         _array = _doc.to<JsonArray>();
     }
-#else
-    BatchState(Firmngin *instance) : _instance(instance), _doc(2048)
-    {
-        _array = _doc.to<JsonArray>();
-    }
-#endif
 
     BatchState &add(String key, String value)
     {
-#if ARDUINOJSON_VERSION_MAJOR >= 7
         JsonObject obj = _array.add<JsonObject>();
-#else
-        JsonObject obj = _array.createNestedObject();
-#endif
         obj["key"] = key;
         obj["value"] = value;
         return *this;
@@ -430,6 +423,7 @@ public:
     void setNtpServer(const char *ntpServer);
     void setClient(Client &client);
     void setMQTTServer(const char *server, int port);
+    void setInsecure(bool insecure = true);
     bool isPlatformSupported();
 
     void on(const char *state, StateCallbackFunction callback);
@@ -450,6 +444,7 @@ public:
 
 private:
     const char *_deviceId;
+    const char *_deviceKey;
     bool _debug;
     unsigned long _lastMQTTAttempt;
 
@@ -465,6 +460,7 @@ private:
 
     String _mqttServer;
     int _mqttPort;
+    bool _insecure = false;
 
 #if defined(ESP8266)
     const char *_clientCert = nullptr;
