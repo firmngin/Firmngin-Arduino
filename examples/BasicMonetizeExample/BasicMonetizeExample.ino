@@ -26,7 +26,7 @@ Firmngin fngin(DEVICE_ID, DEVICE_KEY);
 
 void setupStates()
 {
-  // Payment flow — handles both pending and success
+  // Payment flow: handles both pending and success
   fngin.on(PAYMENTS, [](Payments &p) {
     if (p.isPending()) {
       Serial.println("Payment pending...");

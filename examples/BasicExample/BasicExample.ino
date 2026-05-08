@@ -63,7 +63,7 @@ ON_ENTITY_S("status", [](EntityCommand &cmd) {
 
 void setupStates()
 {
-  // Payment flow — single callback handles both pending and success
+  // Payment flow: single callback handles both pending and success
   fngin.on(PAYMENTS, [](Payments &p) {
     if (p.isPending()) {
       Serial.println("---------- PAYMENT PENDING ----------");
@@ -78,7 +78,7 @@ void setupStates()
     // Serial.println(p.metadata());
   });
 
-  // Device status handler — typed callback with boolean helpers
+  // Device status handler: typed callback with boolean helpers
   fngin.on(DEVICE_STATUS, [](DeviceStates &ds) {
     if (ds.isIdle()) {
       Serial.println("Device is idle");
@@ -131,7 +131,7 @@ void setupStates()
     Serial.println(state.getPayload());
   });
 
-  // Init response handler — typed callback with boolean helpers
+  // Init response handler: typed callback with boolean helpers
   fngin.on(INIT, [](Inits &i) {
     Serial.println("Init response received");
     Serial.print("Entities: "); Serial.println(i.entities());  // raw JSON array
@@ -234,9 +234,9 @@ void setupStates()
     Serial.println(state.getPayload());
   });
 
-  // Entity command handler — backend sends commands to specific entities (e.g. gpio_1)
+  // Entity command handler: backend sends commands to specific entities (e.g. gpio_1)
   fngin.on(ENTITIES, [](EntityCommand &cmd) {
-    Serial.print("Entity command received — Key: ");
+    Serial.print("Entity command received: Key: ");
     Serial.print(cmd.key());
     Serial.print(" Value: ");
     Serial.println(cmd.value());

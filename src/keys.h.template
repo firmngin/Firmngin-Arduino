@@ -16,13 +16,13 @@
 // CHOOSE VALIDATION MODE (uncomment ONE):
 // =========================================================================
 
-// Mode 1: CA Certificate — Full chain validation
+// Mode 1: CA Certificate: Full chain validation
 // Recommended for: ESP32, Production environments
 // Pros: Highest security, auto-renew safe, supports CRL revocation
 // Cons: Uses more memory
 // #define USE_CA_CERT
 
-// Mode 2: Fingerprint — SHA1 server validation
+// Mode 2: Fingerprint: SHA1 server validation
 // Recommended for: ESP8266, Prototypes
 // Pros: Lightweight, memory efficient
 // Cons: Must update if server certificate changes

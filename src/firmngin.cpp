@@ -229,6 +229,13 @@ void Firmngin::begin()
 
     syncTime();
 
+    if (_debug)
+    {
+        time_t now = time(nullptr);
+        Serial.print("Epoch: ");
+        Serial.println((unsigned long)now);
+    }
+
     printBanner();
 
 #if defined(ESP8266)
@@ -267,10 +274,10 @@ void Firmngin::begin()
 
 #if defined(USE_CA_CERT) && KEYS_H_AVAILABLE
     _wifiClient.setTrustAnchors(new BearSSL::X509List(CA_CERT));
-    Serial.println("🔒 Server validation: CA Certificate (USE_CA_CERT)");
+    Serial.println("Server validation: CA Certificate (USE_CA_CERT)");
 #elif fingerprint != nullptr
     _wifiClient.setFingerprint(fingerprint);
-    Serial.println("🔒 Server validation: Fingerprint");
+    Serial.println("Server validation: Fingerprint");
 #else
     Serial.println("ERROR: No server validation method configured");
     return;
@@ -300,17 +307,17 @@ void Firmngin::begin()
     if (_insecure)
     {
         _wifiClient.setInsecure();
-        Serial.println("⚠️  Server validation: DISABLED (setInsecure)");
+        Serial.println("Server validation: DISABLED (setInsecure)");
     }
     else if (caCert != nullptr)
     {
         _wifiClient.setCACert(caCert);
-        Serial.println("🔒 Server validation: CA Certificate");
+        Serial.println("Server validation: CA Certificate");
     }
     else
     {
         _wifiClient.setInsecure();
-        Serial.println("⚠️  Server validation: DISABLED (no CA cert)");
+        Serial.println("Server validation: DISABLED (no CA cert)");
     }
     _wifiClient.setCertificate(clientCert);
     _wifiClient.setPrivateKey(privateKey);
@@ -397,7 +404,7 @@ void Firmngin::on(DeviceStateType state, PaymentCallbackFunction callback)
     _paymentsCallback = callback;
 }
 
-// Verifications constructor — parses dpin or vr JSON automatically
+// Verifications constructor: parses dpin or vr JSON automatically
 Verifications::Verifications(const String &jsonPayload)
 {
     _valid = false;
@@ -440,7 +447,7 @@ Verifications::Verifications(const String &jsonPayload)
     _valid = _pin.length() > 0 || doc["pn"].is<bool>();
 }
 
-// Payments constructor — parses pp or pm JSON automatically
+// Payments constructor: parses pp or pm JSON automatically
 Payments::Payments(const String &jsonPayload)
 {
     _valid = false;
@@ -501,7 +508,7 @@ void Firmngin::onEntity(const char *key, EntityCommandCallbackFunction callback)
     _entityCallbacks[String(key)] = callback;
 }
 
-// Inits constructor — parses init JSON automatically
+// Inits constructor: parses init JSON automatically
 Inits::Inits(const String &jsonPayload)
 {
     _valid = false;
@@ -533,7 +540,7 @@ Inits::Inits(const String &jsonPayload)
     _valid = doc["m"].is<const char *>();
 }
 
-// DeviceStates constructor — parses ds JSON automatically
+// DeviceStates constructor: parses ds JSON automatically
 DeviceStates::DeviceStates(const String &jsonPayload)
 {
     _valid = false;
@@ -552,7 +559,7 @@ DeviceStates::DeviceStates(const String &jsonPayload)
     }
 }
 
-// Usages constructor — parses ur, le, or nl JSON automatically
+// Usages constructor: parses ur, le, or nl JSON automatically
 Usages::Usages(const String &jsonPayload)
 {
     _valid = false;
@@ -602,7 +609,6 @@ Usages::Usages(const String &jsonPayload)
 void Firmngin::setupLWT()
 {
     String willTopic = "/d/" + String(_deviceId) + "/lwt";
-    _Debug("LWT: " + willTopic);
 }
 
 void Firmngin::loop()
@@ -666,7 +672,8 @@ bool Firmngin::connectServer()
         if (now - _lastMQTTAttempt >= _delayRetryMQTT)
         {
             _lastMQTTAttempt = now;
-            Serial.print("Connecting to MQTT (");
+            Serial.print("Connecting to server...");
+            Serial.print(" (attempt ");
             Serial.print(retryCount + 1);
             Serial.println(")");
 
@@ -674,6 +681,8 @@ bool Firmngin::connectServer()
             String willMessage = "0";
 
             _mqttClient.disconnect();
+            _wifiClient.stop();
+            delay(100);
             bool connected = _mqttClient.connect(_deviceId, _deviceId, _deviceKey, willTopic.c_str(), 1, true, willMessage.c_str());
 
             if (connected)
@@ -696,7 +705,7 @@ bool Firmngin::connectServer()
                 delay(10);
                 _mqttClient.publish(willTopic.c_str(), "1", true);
 
-                Serial.println("Connected!");
+                Serial.println("Connected.");
                 return true;
             }
             else
@@ -767,14 +776,6 @@ void Firmngin::mqttCallback(char *topic, byte *payload, unsigned int length)
         payloadStr += (char)payload[i];
     }
 
-    if (_debug)
-    {
-        Serial.print("[");
-        Serial.print(topic);
-        Serial.print("]: ");
-        Serial.println(payloadStr);
-    }
-
     String topicStr = String(topic);
     String stateType = "";
 
@@ -791,7 +792,7 @@ void Firmngin::mqttCallback(char *topic, byte *payload, unsigned int length)
         _callbacks[stateType](state);
     }
 
-    // Typed callbacks — auto-parse, no manual JSON needed
+    // Typed callbacks: auto-parse, no manual JSON needed
     if ((stateType == "dpin" || stateType == "vr") && _verificationCallback)
     {
         Verifications v(payloadStr);

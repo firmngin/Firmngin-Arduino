@@ -306,9 +306,9 @@ inline std::vector<EntityRegEntry> &deferredEntityRegistrations()
     return registrations;
 }
 
-// Macro for global Entity registration — two forms:
-// 1. ON_ENTITY(entityObject, callback)    — register callback for entity object
-// 2. ON_ENTITY_S("key", callback)         — register callback for string key
+// Macro for global Entity registration: two forms:
+// 1. ON_ENTITY(entityObject, callback)    : register callback for entity object
+// 2. ON_ENTITY_S("key", callback)         : register callback for string key
 #define FNGIN_CONCAT_IMPL(a, b) a##b
 #define FNGIN_CONCAT(a, b) FNGIN_CONCAT_IMPL(a, b)
 

@@ -33,7 +33,7 @@ void setup() {
   }
   Serial.println("\nWiFi connected");
 
-  // Verification flow — single callback handles both dpin and vr
+  // Verification flow: single callback handles both dpin and vr
   fngin.on(VERIFICATIONS, [](Verifications &v) {
     if (v.hasPinNumber()) {
       Serial.println("========== PIN RECEIVED ==========");

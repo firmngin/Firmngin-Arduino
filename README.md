@@ -11,8 +11,8 @@ Check out [firmngin.dev](https://firmngin.dev) for more information.
 ## Features
 
 - **ESP8266 & ESP32** support
-- **Event-driven API** using `on()` callbacks — raw or typed
-- **Typed objects** for common flows — `Verifications`, `Payments`, `Usages`, `DeviceStates`, `Inits`, `EntityCommand`
+- **Event-driven API** using `on()` callbacks: raw or typed
+- **Typed objects** for common flows: `Verifications`, `Payments`, `Usages`, `DeviceStates`, `Inits`, `EntityCommand`
 - **mTLS authentication** via `keys.h` (optional but recommended)
 
 ## Installation
@@ -172,9 +172,9 @@ Register handlers using the enum constants. Use `on(ENUM, callback)` for raw cal
 | `INIT`                | Initial configuration after connection                         |
 | `DISPLAY_PIN`         | Display PIN on screen for guest verification                   |
 | `VERIFICATION_RESULT` | PIN or precondition check result                               |
-| `VERIFICATIONS`       | Typed callback — handles PIN display and verification result   |
-| `PAYMENTS`            | Typed callback — handles pending and success payments          |
-| `USAGES`              | Typed callback — handles usage, limit exceeded, and near limit |
+| `VERIFICATIONS`       | Typed callback: handles PIN display and verification result   |
+| `PAYMENTS`            | Typed callback: handles pending and success payments          |
+| `USAGES`              | Typed callback: handles usage, limit exceeded, and near limit |
 | `USAGE_RESPONSE`      | Current MQTT usage and quota                                   |
 | `LIMIT_EXCEEDED`      | Quota limit reached                                            |
 | `NEAR_LIMIT`          | Approaching quota limit                                        |
@@ -426,8 +426,8 @@ pio run -e esp32dev
 
 | Function                      | Description                                                      | Return Type  | Possible Values                   |
 | ----------------------------- | ---------------------------------------------------------------- | ------------ | --------------------------------- |
-| `begin()`                     | Initialize library, sync time, setup mTLS, and connect to server | `void`       | —                                 |
-| `loop()`                      | Maintain connection and process incoming messages                | `void`       | —                                 |
+| `begin()`                     | Initialize library, sync time, setup mTLS, and connect to server | `void`       | N/A                               |
+| `loop()`                      | Maintain connection and process incoming messages                | `void`       | N/A                               |
 | `setDebug(bool)`              | Enable/disable debug output to Serial                            | `void`       | `true`, `false`                   |
 | `setTimezone(int)`            | Set timezone offset from GMT                                     | `void`       | `-12` to `12`                     |
 | `setDaylightOffsetSec(int)`   | Set daylight saving offset in seconds                            | `void`       | Any integer                       |
@@ -536,7 +536,7 @@ pio run -e esp32dev
 
 | Function      | Description             | Return Type | Example                 |
 | ------------- | ----------------------- | ----------- | ----------------------- |
-| `Entity(key)` | Constructor with key    | —           | `Entity("temperature")` |
+| `Entity(key)` | Constructor with key    | N/A           | `Entity("temperature")` |
 | `key()`       | Get entity key          | `String`    | e.g. `"gpio_1"`         |
 | `gpio()`      | Get GPIO pin (optional) | `int`       | e.g. `2`                |
 | `hasGpio()`   | Check if GPIO is set    | `bool`      | `true`, `false`         |
