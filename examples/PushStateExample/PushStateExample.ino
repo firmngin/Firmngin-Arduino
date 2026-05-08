@@ -1,14 +1,14 @@
 /*
- * FirmnginKit Push State Example
+ * Firmngin Push State Example
  *
- * Example using pushState() and VPin to send data to server
+ * Example using pushEntity() and pushBatchEntities() to send data to server
  *
  * website: https://firmngin.dev
  * author: (Arif) Firmngin.dev
  */
 
 #include "keys.h"
-#include "firmnginKit.h"
+#include <firmngin.h>
 
 #if defined(ESP8266)
 #include <ESP8266WiFi.h>
@@ -16,26 +16,24 @@
 #include <WiFi.h>
 #endif
 
-#define DEVICE_ID "FNG_YOUR_DEVICE_ID"
-#define DEVICE_KEY "FNG_YOUR_DEVICE_KEY"
+#define DEVICE_ID "YOUR_DEVICE_ID"
+#define DEVICE_KEY "YOUR_DEVICE_SECRET_KEY"
 
 // WiFi credentials
 const char *ssid = "YOUR_SSID";
 const char *password = "YOUR_PASSWORD";
 
 #if defined(ESP8266)
-FirmnginKit fngin(DEVICE_ID, DEVICE_KEY, CLIENT_CERT, PRIVATE_KEY, SERVER_FINGERPRINT_BYTES);
+Firmngin fngin(DEVICE_ID, DEVICE_KEY, CLIENT_CERT, PRIVATE_KEY, SERVER_FINGERPRINT_BYTES);
 #elif defined(ESP32)
-FirmnginKit fngin(DEVICE_ID, DEVICE_KEY, SERVER_FINGERPRINT_BYTES, CLIENT_CERT, PRIVATE_KEY);
+Firmngin fngin(DEVICE_ID, DEVICE_KEY, SERVER_FINGERPRINT_BYTES, CLIENT_CERT, PRIVATE_KEY);
 #endif
 
-// Method 1: Direct pushState (manual)
+// Method 1: Direct pushEntity (manual)
 unsigned long lastManualPush = 0;
 
-// Method 2: VPin with smart conditions
-VPin sensorA = VPin(10).onChange();       // Push only when value changes
-VPin sensorB = VPin(20).interval(5000);   // Push every 5 seconds
-VPin sensorC = VPin(30).threshold(10);    // Push when change >= 10
+// Method 2: Batch builder
+unsigned long lastBatchPush = 0;
 
 void setup()
 {
@@ -60,7 +58,7 @@ void setup()
   fngin.begin();
 
   // Send initial status
-  fngin.pushState(10, "READY");
+  fngin.pushEntity("status", "READY");
   Serial.println("Initial status sent: READY");
 }
 
@@ -73,27 +71,26 @@ void loop()
   int valueB = random(0, 100);
   int valueC = random(0, 255);
 
-  // Method 2: VPin auto handles conditions
-  if (sensorA.push(valueA)) {
-    Serial.print("sensorA pushed (onChange): ");
-    Serial.println(valueA);
-  }
-
-  if (sensorB.push(valueB)) {
-    Serial.print("sensorB pushed (interval): ");
-    Serial.println(valueB);
-  }
-
-  if (sensorC.push(valueC)) {
-    Serial.print("sensorC pushed (threshold): ");
-    Serial.println(valueC);
-  }
-
-  // Method 1: Direct pushState (every 10 seconds)
+  // Method 1: Direct pushEntity (every 10 seconds)
   if (millis() - lastManualPush >= 10000) {
     lastManualPush = millis();
-    fngin.pushState("uptime", String(millis() / 1000));
+    String uptime = String(millis() / 1000);
+    fngin.pushEntity("uptime", uptime.c_str());
     Serial.println("Manual push: uptime");
+  }
+
+  // Method 2: Batch push (every 5 seconds)
+  if (millis() - lastBatchPush >= 5000) {
+    lastBatchPush = millis();
+    bool sent = fngin.pushBatchEntities()
+      .add("sensor_a", String(valueA))
+      .add("sensor_b", String(valueB))
+      .add("sensor_c", String(valueC))
+      .send();
+
+    if (sent) {
+      Serial.println("Batch pushed: sensor_a, sensor_b, sensor_c");
+    }
   }
 
   delay(500);

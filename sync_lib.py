@@ -11,7 +11,7 @@ project_dir = Path(__file__).parent
 src_dir = project_dir / "src"
 example_dir = project_dir / "examples" / "BasicExample"
 
-files_to_copy = ["firmnginKit.h", "firmnginKit.cpp"]
+files_to_copy = ["firmngin.h", "firmngin.cpp"]
 
 def sync():
     for filename in files_to_copy:

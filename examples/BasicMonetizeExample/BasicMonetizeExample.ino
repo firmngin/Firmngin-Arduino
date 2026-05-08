@@ -1,12 +1,12 @@
 /*
- * FirmnginKit Basic Example
+ * Firmngin Basic Monetize Example
  * 
  * website: https://firmngin.dev
  * author: (Arif) Firmngin.dev
  */
 
 #include "keys.h" 
-#include "firmnginKit.h"
+#include <firmngin.h>
 #include <ArduinoJson.h>
 
 #if defined(ESP8266)
@@ -15,62 +15,56 @@
 #include <WiFi.h>
 #endif
 
-#define DEVICE_ID "FNG_YOUR_DEVICE_ID"
-#define DEVICE_KEY "FNG_YOUR_DEVICE_KEY"
+#define DEVICE_ID "YOUR_DEVICE_ID"
+#define DEVICE_KEY "YOUR_DEVICE_SECRET_KEY"
 
 // WiFi credentials
 const char *ssid = "YOUR_SSID";
 const char *password = "YOUR_PASSWORD";
 
-#if defined(ESP8266)
-FirmnginKit fngin(DEVICE_ID, DEVICE_KEY, CLIENT_CERT, PRIVATE_KEY, SERVER_FINGERPRINT_BYTES);
-#elif defined(ESP32)
-// Choose one of these options:
-// Option 1: CA Certificate verification (recommended for production)
-// FirmnginKit fngin(DEVICE_ID, DEVICE_KEY, CA_CERT, CLIENT_CERT, PRIVATE_KEY);
-
-// Option 2: Fingerprint verification (ESP8266-style, limited support on ESP32)
-// FirmnginKit fngin(DEVICE_ID, DEVICE_KEY, SERVER_FINGERPRINT_BYTES, CLIENT_CERT, PRIVATE_KEY);
-
-// For now, using fingerprint option since CA certificate is causing issues
-FirmnginKit fngin(DEVICE_ID, DEVICE_KEY, SERVER_FINGERPRINT_BYTES, CLIENT_CERT, PRIVATE_KEY);
-#endif
+Firmngin fngin(DEVICE_ID, DEVICE_KEY);
 
 void setupStates()
 {
-  // Payment success handler
-  fngin.onStateMonetize(PAYMENT_SUCCESS, [](DeviceState state) {
-    Serial.println("Payment success received");
-    String payload = state.getPayload();
-    Serial.println(payload);
+  // Payment flow — handles both pending and success
+  fngin.on(PAYMENTS, [](Payments &p) {
+    if (p.isPending()) {
+      Serial.println("Payment pending...");
+    }
+    if (p.isSuccess()) {
+      Serial.println("Payment success!");
+    }
+    Serial.print("Item:  "); Serial.println(p.itemTitle());
+    Serial.print("Price: "); Serial.println(p.price());
+    Serial.print("Order: "); Serial.println(p.orderId());
   });
 
   // Device status handler
-  fngin.onStateMonetize(DEVICE_STATUS, [](DeviceState state) {
+  fngin.on(DEVICE_STATUS, [](DeviceState state) {
     Serial.println("Device status received");
     Serial.println(state.getPayload());
   });
 
-  // Payment pending handler
-  fngin.onStateMonetize(PAYMENT_PENDING, [](DeviceState state) {
+  // Pending payment handler (raw)
+  fngin.on(PENDING_PAYMENT, [](DeviceState state) {
     Serial.println("Payment pending received");
     Serial.println(state.getPayload());
   });
 
-  // On pending payments handler
-  fngin.onStateMonetize(CUSTOM_ON_PENDING_PAYMENTS, [](DeviceState state) {
+  // Metadata on pending payments (raw JSON from menu_items.on_pending_payments)
+  fngin.on(METADATA_ON_PENDING, [](DeviceState state) {
     Serial.println("On pending payments received");
     Serial.println(state.getPayload());
   });
 
-  // On expired payments handler
-  fngin.onStateMonetize(CUSTOM_ON_EXPIRED_PAYMENTS, [](DeviceState state) {
+  // Metadata on expired payments (raw JSON from menu_items.on_expired_payments)
+  fngin.on(METADATA_ON_EXPIRED, [](DeviceState state) {
     Serial.println("On expired payments received");
     Serial.println(state.getPayload());
   });
 
-  // On success payments handler
-  fngin.onStateMonetize(CUSTOM_ON_SUCCESS_PAYMENTS, [](DeviceState state) {
+  // Metadata on success payments (raw JSON from menu_items.on_success_payments)
+  fngin.on(METADATA_ON_SUCCESS, [](DeviceState state) {
     Serial.println("On success payments received");
     Serial.println(state.getPayload());
   });
