@@ -198,6 +198,11 @@ String Firmngin::getTopicEntityCommand(String deviceId)
     return String("/d/") + deviceId + "/rs/+";
 }
 
+String Firmngin::getPathPing(String deviceId)
+{
+    return String("/c/") + deviceId + "/" + PATH_PING;
+}
+
 static void printBanner()
 {
     Serial.println();
@@ -700,6 +705,7 @@ bool Firmngin::connectServer()
                 _mqttClient.subscribe(getTopicLimitExceeded(_deviceId).c_str(), defaultQos);
                 _mqttClient.subscribe(getTopicNearLimit(_deviceId).c_str(), defaultQos);
                 _mqttClient.subscribe(getTopicEntityCommand(_deviceId).c_str(), defaultQos);
+                _mqttClient.subscribe(getPathPing(_deviceId).c_str(), defaultQos);
 
                 _mqttClient.publish(willTopic.c_str(), "", true);
                 delay(10);
@@ -840,6 +846,13 @@ void Firmngin::mqttCallback(char *topic, byte *payload, unsigned int length)
         {
             _initCallback(i);
         }
+    }
+
+    // Auto-reply: echo back ping payload as pong
+    if (stateType == "pi")
+    {
+        String pongTopic = "/d/" + String(_deviceId) + "/" + PATH_PONG;
+        _mqttClient.publish(pongTopic.c_str(), payloadStr.c_str());
     }
 
     if (topicStr.indexOf("/rs/") >= 0)
