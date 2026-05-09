@@ -851,6 +851,10 @@ void Firmngin::mqttCallback(char *topic, byte *payload, unsigned int length)
     // Auto-reply: echo back ping payload as pong
     if (stateType == "pi")
     {
+        if (_debug) {
+            Serial.print("[PING] ");
+            Serial.println(payloadStr);
+        }
         String pongTopic = "/d/" + String(_deviceId) + "/" + PATH_PONG;
         _mqttClient.publish(pongTopic.c_str(), payloadStr.c_str());
     }
