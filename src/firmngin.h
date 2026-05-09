@@ -52,6 +52,8 @@
 #define PATH_METADATA_ON_PENDING "mop"
 #define PATH_METADATA_ON_EXPIRED "moe"
 #define PATH_METADATA_ON_SUCCESS "mos"
+#define PATH_PING "pi"
+#define PATH_PONG "po"
 
 // Readable State Constants (enum)
 enum DeviceStateType
@@ -503,6 +505,7 @@ private:
     String getTopicUpdateEntities(String deviceId);
     String getTopicRequestInit(String deviceId);
     String getTopicEntityCommand(String deviceId);
+    String getPathPing(String deviceId);
     void syncTime();
     void setupLWT();
 };
