@@ -143,13 +143,14 @@ private:
     String _itemTitle;
     String _price;
     String _orderId;
+    int _quantity;
     bool _isPending;
     bool _isSuccess;
     bool _valid;
     String _rawPayload;
 
 public:
-    Payments() : _itemTitle(""), _price(""), _orderId(""), _isPending(false), _isSuccess(false), _valid(false) {}
+    Payments() : _itemTitle(""), _price(""), _orderId(""), _quantity(1), _isPending(false), _isSuccess(false), _valid(false) {}
     Payments(const String &jsonPayload);
 
     bool isValid() const { return _valid; }
@@ -158,6 +159,7 @@ public:
     String itemTitle() const { return _itemTitle; }
     String price() const { return _price; }
     String orderId() const { return _orderId; }
+    int quantity() const { return _quantity; }
     String metadata() const { return _rawPayload; }
 
     void setPending(bool pending) { _isPending = pending; }

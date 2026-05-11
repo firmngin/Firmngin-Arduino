@@ -459,6 +459,7 @@ Payments::Payments(const String &jsonPayload)
     _itemTitle = "";
     _price = "";
     _orderId = "";
+    _quantity = 1;
     _isPending = false;
     _isSuccess = false;
     _rawPayload = jsonPayload;
@@ -479,6 +480,12 @@ Payments::Payments(const String &jsonPayload)
     if (doc["oid"].is<const char *>())
     {
         _orderId = doc["oid"].as<String>();
+    }
+    if (doc["q"].is<int>())
+    {
+        _quantity = doc["q"].as<int>();
+        if (_quantity < 1)
+            _quantity = 1;
     }
 
     _valid = _itemTitle.length() > 0 || _orderId.length() > 0;
