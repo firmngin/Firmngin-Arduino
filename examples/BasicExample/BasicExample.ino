@@ -111,6 +111,7 @@ void setupStates()
     Serial.print("  Item:  "); Serial.println(doc["it"].as<String>());
     Serial.print("  Price: "); Serial.println(doc["pc"].as<String>());
     Serial.print("  Order: "); Serial.println(doc["oid"].as<String>());
+    Serial.print("  Qty:   "); Serial.println(doc["q"].as<int>());
   });
 
   // Metadata on pending payments (raw JSON from menu_items.on_pending_payments)
