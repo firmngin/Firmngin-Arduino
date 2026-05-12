@@ -16,7 +16,6 @@
 
 #include <Arduino.h>
 #include <firmngin.h>
-#include <ArduinoJson.h>
 
 #if defined(ESP8266)
 #include <ESP8266WiFi.h>
@@ -106,12 +105,18 @@ void setupStates()
   fngin.on(PENDING_PAYMENT, [](DeviceState state) {
     Serial.println("Pending payment notification received");
     String payload = state.getPayload();
-    JsonDocument doc;
-    deserializeJson(doc, payload);
-    Serial.print("  Item:  "); Serial.println(doc["it"].as<String>());
-    Serial.print("  Price: "); Serial.println(doc["pc"].as<String>());
-    Serial.print("  Order: "); Serial.println(doc["oid"].as<String>());
-    Serial.print("  Qty:   "); Serial.println(doc["q"].as<int>());
+    firmngin_json::Parser p(payload.c_str(), payload.length());
+    char buf[128];
+    if (p.getString("it", buf, sizeof(buf)) > 0) {
+      Serial.print("  Item:  "); Serial.println(buf);
+    }
+    if (p.getString("pc", buf, sizeof(buf)) > 0) {
+      Serial.print("  Price: "); Serial.println(buf);
+    }
+    if (p.getString("oid", buf, sizeof(buf)) > 0) {
+      Serial.print("  Order: "); Serial.println(buf);
+    }
+    Serial.print("  Qty:   "); Serial.println(p.getInt("q", 0));
   });
 
   // Metadata on pending payments (raw JSON from menu_items.on_pending_payments)
@@ -165,22 +170,18 @@ void setupStates()
     Serial.println("Display PIN command received");
     String payload = state.getPayload();
     
-    JsonDocument doc;
-    DeserializationError error = deserializeJson(doc, payload);
-    if (!error) {
-      if (doc["pi"].is<const char *>()) {
-        Serial.print("PIN: ");
-        Serial.println(doc["pi"].as<String>());
-      }
-      if (doc["si"].is<const char *>()) {
-        Serial.print("Session ID: ");
-        Serial.println(doc["si"].as<String>());
-      }
-      if (doc["ttl"].is<int>()) {
-        Serial.print("TTL: ");
-        Serial.println(doc["ttl"].as<int>());
-      }
+    firmngin_json::Parser p(payload.c_str(), payload.length());
+    char buf[64];
+    if (p.getString("pi", buf, sizeof(buf)) > 0) {
+      Serial.print("PIN: ");
+      Serial.println(buf);
     }
+    if (p.getString("si", buf, sizeof(buf)) > 0) {
+      Serial.print("Session ID: ");
+      Serial.println(buf);
+    }
+    Serial.print("TTL: ");
+    Serial.println(p.getInt("ttl", 0));
   });
 
   // Verification result handler
@@ -188,16 +189,13 @@ void setupStates()
     Serial.println("Verification result received");
     String payload = state.getPayload();
     
-    JsonDocument doc;
-    DeserializationError error = deserializeJson(doc, payload);
-    if (!error) {
-      bool pinMet = doc["pn"] | false;
-      bool precondMet = doc["pr"] | false;
-      Serial.print("PIN met: ");
-      Serial.println(pinMet ? "true" : "false");
-      Serial.print("Precondition met: ");
-      Serial.println(precondMet ? "true" : "false");
-    }
+    firmngin_json::Parser p(payload.c_str(), payload.length());
+    bool pinMet = p.getBool("pn", false);
+    bool precondMet = p.getBool("pr", false);
+    Serial.print("PIN met: ");
+    Serial.println(pinMet ? "true" : "false");
+    Serial.print("Precondition met: ");
+    Serial.println(precondMet ? "true" : "false");
   });
 
   // Usage response handler
@@ -205,22 +203,13 @@ void setupStates()
     Serial.println("Usage response received");
     String payload = state.getPayload();
     
-    JsonDocument doc;
-    DeserializationError error = deserializeJson(doc, payload);
-    if (!error) {
-      if (doc["u"].is<int>()) {
-        Serial.print("Used: ");
-        Serial.println(doc["u"].as<int>());
-      }
-      if (doc["l"].is<int>()) {
-        Serial.print("Limit: ");
-        Serial.println(doc["l"].as<int>());
-      }
-      if (doc["pct"].is<int>()) {
-        Serial.print("Percentage: ");
-        Serial.println(doc["pct"].as<int>());
-      }
-    }
+    firmngin_json::Parser p(payload.c_str(), payload.length());
+    Serial.print("Used: ");
+    Serial.println(p.getInt("u", 0));
+    Serial.print("Limit: ");
+    Serial.println(p.getInt("l", 0));
+    Serial.print("Percentage: ");
+    Serial.println(p.getInt("pct", 0));
   });
 
   // Limit exceeded handler

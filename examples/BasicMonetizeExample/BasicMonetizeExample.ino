@@ -7,7 +7,6 @@
 
 #include "keys.h" 
 #include <firmngin.h>
-#include <ArduinoJson.h>
 
 #if defined(ESP8266)
 #include <ESP8266WiFi.h>

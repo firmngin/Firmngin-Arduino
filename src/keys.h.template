@@ -67,4 +67,11 @@ static const uint8_t SERVER_FINGERPRINT_BYTES[20] PROGMEM = {
   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
 };
 
+// E2EE Decryption Key (for IoT End-to-End Encryption)
+// AES-128-GCM (16 bytes = 32 hex chars) or ChaCha20-Poly1305 (32 bytes = 64 hex chars)
+// Derived from HMAC-SHA256(MQTT_MASTER_SECRET_KEY, device_id)
+// Set this to the hex-encoded device key from the backend.
+// If E2EE is not used, leave as empty string.
+static const char DECRYPTOR[] PROGMEM = "";
+
 #endif // KEYS_H
