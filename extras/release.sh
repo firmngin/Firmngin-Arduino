@@ -60,6 +60,12 @@ cp "$ROOT_DIR/CHANGELOG.md" "$RELEASE_DIR/" 2>/dev/null || echo "CHANGELOG.md no
 # Copy source files
 cp "$ROOT_DIR/src/firmngin.h" "$RELEASE_DIR/src/" 2>/dev/null || echo "firmngin.h not found"
 cp "$ROOT_DIR/src/firmngin.cpp" "$RELEASE_DIR/src/" 2>/dev/null || echo "firmngin.cpp not found"
+cp "$ROOT_DIR/src/firmngin_json.h" "$RELEASE_DIR/src/" 2>/dev/null || echo "firmngin_json.h not found"
+
+# Copy bundled PubSubClient
+mkdir -p "$RELEASE_DIR/src/PubSubClient"
+cp "$ROOT_DIR/src/PubSubClient/PubSubClient.h" "$RELEASE_DIR/src/PubSubClient/" 2>/dev/null || echo "PubSubClient.h not found"
+cp "$ROOT_DIR/src/PubSubClient/PubSubClient.cpp" "$RELEASE_DIR/src/PubSubClient/" 2>/dev/null || echo "PubSubClient.cpp not found"
 
 # Copy examples
 echo "Copying examples..."

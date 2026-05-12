@@ -2,12 +2,18 @@
 #define FIRMNGINKIT_H
 
 #include <Arduino.h>
-#include <ArduinoJson.h>
-#include <PubSubClient.h>
+#include "PubSubClient/PubSubClient.h"
+#include "firmngin_json.h"
 #include <time.h>
 #include <map>
 #include <vector>
 #include <functional>
+
+#if defined(ESP32)
+#include <mbedtls/gcm.h>
+#elif defined(ESP8266)
+#include <ChaChaPoly.h>
+#endif
 
 #if defined(ESP8266)
 #include <ESP8266WiFi.h>
@@ -327,24 +333,24 @@ inline std::vector<EntityRegEntry> &deferredEntityRegistrations()
         return true; })();
 
 // BatchState: Builder pattern for batch entity updates
+#define FIRMNGIN_BATCH_BUFFER_SIZE 1024
+
 class BatchState
 {
 private:
     Firmngin *_instance;
-    JsonDocument _doc;
-    JsonArray _array;
+    char _buffer[FIRMNGIN_BATCH_BUFFER_SIZE];
+    firmngin_json::ArrayBuilder _builder;
 
 public:
-    BatchState(Firmngin *instance) : _instance(instance)
+    BatchState(Firmngin *instance) : _instance(instance), _builder(_buffer, sizeof(_buffer))
     {
-        _array = _doc.to<JsonArray>();
+        _builder.reset();
     }
 
     BatchState &add(String key, String value)
     {
-        JsonObject obj = _array.add<JsonObject>();
-        obj["key"] = key;
-        obj["value"] = value;
+        _builder.add(key.c_str(), value.c_str());
         return *this;
     }
 
@@ -400,8 +406,8 @@ public:
     }
 
     bool send();
-    int count() { return _array.size(); }
-    void clear() { _array.clear(); }
+    int count() { return _builder.count(); }
+    void clear() { _builder.clear(); }
 };
 
 class Firmngin
@@ -421,14 +427,14 @@ public:
 
     void begin();
     void loop();
-    void setDebug(bool debug);
-    void setTimezone(int timezone);
-    void setDaylightOffsetSec(int daylightOffsetSec);
-    void setNtpServer(const char *ntpServer);
-    void setClient(Client &client);
-    void setMQTTServer(const char *server, int port);
-    void setInsecure(bool insecure = true);
-    bool isPlatformSupported();
+	void setDebug(bool debug);
+	void setTimezone(int timezone);
+	void setDaylightOffsetSec(int daylightOffsetSec);
+	void setNtpServer(const char *ntpServer);
+	void setClient(Client &client);
+	void setMQTTServer(const char *server, int port);
+	void setInsecure(bool insecure = true);
+	bool isPlatformSupported();
 
     void on(const char *state, StateCallbackFunction callback);
     void on(DeviceStateType state, StateCallbackFunction callback);
@@ -450,7 +456,7 @@ private:
     const char *_deviceId;
     const char *_deviceKey;
     bool _debug;
-    unsigned long _lastMQTTAttempt;
+	unsigned long _lastMQTTAttempt;
 
 #if defined(ESP8266) || defined(ESP32)
     WiFiClientSecure _wifiClient;
@@ -458,13 +464,15 @@ private:
     WiFiClient _wifiClient;
 #endif
     PubSubClient _mqttClient;
-    unsigned long _delayRetryMQTT = 5000;
-    int maxRetryMQTT = 3;
-    int defaultQos = 1;
+	unsigned long _delayRetryMQTT = 5000;
+	int maxRetryMQTT = 3;
+	int defaultQos = 1;
 
-    String _mqttServer;
-    int _mqttPort;
-    bool _insecure = false;
+	String _mqttServer;
+	int _mqttPort;
+	bool _insecure = false;
+	bool _e2eeEnabled = false;
+	uint8_t _e2eeKeyBytes[32] = {0};
 
 #if defined(ESP8266)
     const char *_clientCert = nullptr;
@@ -507,9 +515,9 @@ private:
     String getTopicUpdateEntities(String deviceId);
     String getTopicRequestInit(String deviceId);
     String getTopicEntityCommand(String deviceId);
-    String getPathPing(String deviceId);
-    void syncTime();
-    void setupLWT();
+	String getPathPing(String deviceId);
+	void syncTime();
+	void setupLWT();
 };
 
 #endif // FIRMNGINKIT_H

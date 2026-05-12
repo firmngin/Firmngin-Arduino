@@ -15,7 +15,8 @@ Firmngin::Firmngin(const char *deviceId, const char *deviceKey)
       _lastMQTTAttempt(0),
       _mqttClient(_wifiClient),
       _mqttServer(MQTT_SERVER_ADDR),
-      _mqttPort(MQTT_SERVER_PORT)
+      _mqttPort(MQTT_SERVER_PORT),
+_e2eeEnabled(false)
 {
     if (!PLATFORM_SUPPORTED)
     {
@@ -31,6 +32,7 @@ Firmngin::Firmngin(const char *deviceId, const char *deviceKey, const char *clie
       _mqttClient(_wifiClient),
       _mqttServer(MQTT_SERVER_ADDR),
       _mqttPort(MQTT_SERVER_PORT),
+_e2eeEnabled(false),
       _clientCert(clientCert),
       _privateKey(privateKey),
       _fingerprint(fingerprint)
@@ -48,7 +50,8 @@ Firmngin::Firmngin(const char *deviceId, const char *deviceKey)
       _lastMQTTAttempt(0),
       _mqttClient(_wifiClient),
       _mqttServer(MQTT_SERVER_ADDR),
-      _mqttPort(MQTT_SERVER_PORT)
+      _mqttPort(MQTT_SERVER_PORT),
+_e2eeEnabled(false)
 {
     if (!PLATFORM_SUPPORTED)
     {
@@ -64,6 +67,7 @@ Firmngin::Firmngin(const char *deviceId, const char *deviceKey, const char *caCe
       _mqttClient(_wifiClient),
       _mqttServer(MQTT_SERVER_ADDR),
       _mqttPort(MQTT_SERVER_PORT),
+_e2eeEnabled(false),
       _caCert(caCert),
       _clientCert(clientCert),
       _privateKey(privateKey),
@@ -83,6 +87,7 @@ Firmngin::Firmngin(const char *deviceId, const char *deviceKey, const uint8_t *f
       _mqttClient(_wifiClient),
       _mqttServer(MQTT_SERVER_ADDR),
       _mqttPort(MQTT_SERVER_PORT),
+_e2eeEnabled(false),
       _caCert(nullptr),
       _clientCert(clientCert),
       _privateKey(privateKey),
@@ -101,7 +106,8 @@ Firmngin::Firmngin(const char *deviceId, const char *deviceKey)
       _lastMQTTAttempt(0),
       _mqttClient(_wifiClient),
       _mqttServer(MQTT_SERVER_ADDR),
-      _mqttPort(MQTT_SERVER_PORT)
+      _mqttPort(MQTT_SERVER_PORT),
+_e2eeEnabled(false)
 {
     if (!PLATFORM_SUPPORTED)
     {
@@ -328,6 +334,32 @@ void Firmngin::begin()
     _wifiClient.setPrivateKey(privateKey);
 #endif
 
+#if KEYS_H_AVAILABLE && defined(DECRYPTOR)
+    // Auto-load E2EE key from keys.h
+    if (strlen(DECRYPTOR) > 0)
+    {
+        size_t hexLen = strlen(DECRYPTOR);
+        size_t keyLen = hexLen / 2;
+        if (keyLen > 32) keyLen = 32;
+        for (size_t i = 0; i < keyLen; i++)
+        {
+            char c1 = DECRYPTOR[i * 2];
+            char c2 = DECRYPTOR[i * 2 + 1];
+            uint8_t d1 = (c1 >= 'a') ? (c1 - 'a' + 10) : (c1 >= 'A' ? c1 - 'A' + 10 : c1 - '0');
+            uint8_t d2 = (c2 >= 'a') ? (c2 - 'a' + 10) : (c2 >= 'A' ? c2 - 'A' + 10 : c2 - '0');
+            _e2eeKeyBytes[i] = (d1 << 4) | d2;
+        }
+        if (keyLen < 32) memset(_e2eeKeyBytes + keyLen, 0, 32 - keyLen);
+        _e2eeEnabled = true;
+    }
+#endif
+
+    if (_debug)
+    {
+        Serial.print("E2EE is ");
+        Serial.println(_e2eeEnabled ? "Enabled" : "Disabled");
+    }
+
     _mqttClient.setServer(_mqttServer.c_str(), _mqttPort);
     _mqttClient.setCallback([this](char *topic, byte *payload, unsigned int length)
                             { this->mqttCallback(topic, payload, length); });
@@ -420,36 +452,22 @@ Verifications::Verifications(const String &jsonPayload)
     _preconditionMet = false;
     _rawPayload = jsonPayload;
 
-    JsonDocument doc;
-    DeserializationError error = deserializeJson(doc, jsonPayload);
-    if (error)
-        return;
+    firmngin_json::Parser p(jsonPayload.c_str(), jsonPayload.length());
+    char buf[128];
 
-    // dpin fields
-    if (doc["pi"].is<const char *>())
+    if (p.getString("pi", buf, sizeof(buf)) > 0)
     {
-        _pin = doc["pi"].as<String>();
+        _pin = String(buf);
     }
-    if (doc["si"].is<const char *>())
+    if (p.getString("si", buf, sizeof(buf)) > 0)
     {
-        _sessionId = doc["si"].as<String>();
+        _sessionId = String(buf);
     }
-    if (doc["ttl"].is<int>())
-    {
-        _ttl = doc["ttl"].as<int>();
-    }
+    _ttl = p.getInt("ttl", 0);
+    _pinMet = p.getBool("pn", false);
+    _preconditionMet = p.getBool("pr", false);
 
-    // vr fields
-    if (doc["pn"].is<bool>())
-    {
-        _pinMet = doc["pn"].as<bool>();
-    }
-    if (doc["pr"].is<bool>())
-    {
-        _preconditionMet = doc["pr"].as<bool>();
-    }
-
-    _valid = _pin.length() > 0 || doc["pn"].is<bool>();
+    _valid = _pin.length() > 0 || p.has("pn");
 }
 
 // Payments constructor: parses pp or pm JSON automatically
@@ -464,29 +482,24 @@ Payments::Payments(const String &jsonPayload)
     _isSuccess = false;
     _rawPayload = jsonPayload;
 
-    JsonDocument doc;
-    DeserializationError error = deserializeJson(doc, jsonPayload);
-    if (error)
-        return;
+    firmngin_json::Parser p(jsonPayload.c_str(), jsonPayload.length());
+    char buf[128];
 
-    if (doc["it"].is<const char *>())
+    if (p.getString("it", buf, sizeof(buf)) > 0)
     {
-        _itemTitle = doc["it"].as<String>();
+        _itemTitle = String(buf);
     }
-    if (doc["pc"].is<const char *>())
+    if (p.getString("pc", buf, sizeof(buf)) > 0)
     {
-        _price = doc["pc"].as<String>();
+        _price = String(buf);
     }
-    if (doc["oid"].is<const char *>())
+    if (p.getString("oid", buf, sizeof(buf)) > 0)
     {
-        _orderId = doc["oid"].as<String>();
+        _orderId = String(buf);
     }
-    if (doc["q"].is<int>())
-    {
-        _quantity = doc["q"].as<int>();
-        if (_quantity < 1)
-            _quantity = 1;
-    }
+    _quantity = p.getInt("q", 1);
+    if (_quantity < 1)
+        _quantity = 1;
 
     _valid = _itemTitle.length() > 0 || _orderId.length() > 0;
 }
@@ -529,27 +542,22 @@ Inits::Inits(const String &jsonPayload)
     _verificationFlag = 0;
     _rawPayload = jsonPayload;
 
-    JsonDocument doc;
-    DeserializationError error = deserializeJson(doc, jsonPayload);
-    if (error)
-        return;
+    firmngin_json::Parser p(jsonPayload.c_str(), jsonPayload.length());
+    char buf[128];
 
-    if (doc["e"].is<JsonArray>() || doc["e"].is<JsonObject>())
+    size_t rawLen = 0;
+    const char* raw = p.getRaw("e", rawLen);
+    if (raw != nullptr && rawLen > 0)
     {
-        String entitiesStr;
-        serializeJson(doc["e"], entitiesStr);
-        _entitiesJson = entitiesStr;
+        _entitiesJson = String(raw).substring(0, rawLen);
     }
-    if (doc["m"].is<const char *>())
+    if (p.getString("m", buf, sizeof(buf)) > 0)
     {
-        _merchantStatus = doc["m"].as<String>();
+        _merchantStatus = String(buf);
     }
-    if (doc["vf"].is<int>())
-    {
-        _verificationFlag = doc["vf"].as<int>();
-    }
+    _verificationFlag = p.getInt("vf", 0);
 
-    _valid = doc["m"].is<const char *>();
+    _valid = p.has("m");
 }
 
 // DeviceStates constructor: parses ds JSON automatically
@@ -559,14 +567,12 @@ DeviceStates::DeviceStates(const String &jsonPayload)
     _state = "";
     _rawPayload = jsonPayload;
 
-    JsonDocument doc;
-    DeserializationError error = deserializeJson(doc, jsonPayload);
-    if (error)
-        return;
+    firmngin_json::Parser p(jsonPayload.c_str(), jsonPayload.length());
+    char buf[64];
 
-    if (doc["s"].is<const char *>())
+    if (p.getString("s", buf, sizeof(buf)) > 0)
     {
-        _state = doc["s"].as<String>();
+        _state = String(buf);
         _valid = true;
     }
 }
@@ -585,37 +591,23 @@ Usages::Usages(const String &jsonPayload)
     _isLimitExceeded = false;
     _rawPayload = jsonPayload;
 
-    JsonDocument doc;
-    DeserializationError error = deserializeJson(doc, jsonPayload);
-    if (error)
-        return;
+    firmngin_json::Parser p(jsonPayload.c_str(), jsonPayload.length());
+    char buf[64];
 
-    if (doc["u"].is<int>())
+    _used = p.getInt("u", 0);
+    _limit = p.getInt("l", 0);
+    _remaining = p.getInt("r", 0);
+    _percentage = p.getInt("pct", 0);
+    if (p.getString("ra", buf, sizeof(buf)) > 0)
     {
-        _used = doc["u"].as<int>();
+        _resetAt = String(buf);
     }
-    if (doc["l"].is<int>())
+    if (p.getString("g", buf, sizeof(buf)) > 0)
     {
-        _limit = doc["l"].as<int>();
-    }
-    if (doc["r"].is<int>())
-    {
-        _remaining = doc["r"].as<int>();
-    }
-    if (doc["pct"].is<int>())
-    {
-        _percentage = doc["pct"].as<int>();
-    }
-    if (doc["ra"].is<const char *>())
-    {
-        _resetAt = doc["ra"].as<String>();
-    }
-    if (doc["g"].is<const char *>())
-    {
-        _granularity = doc["g"].as<String>();
+        _granularity = String(buf);
     }
 
-    _valid = doc["u"].is<int>() || doc["l"].is<int>();
+    _valid = p.has("u") || p.has("l");
 }
 
 void Firmngin::setupLWT()
@@ -780,13 +772,104 @@ bool Firmngin::connectServer()
     return false;
 }
 
+static bool decryptE2EE(const uint8_t *packet, size_t packetLen, const uint8_t *key, size_t keyLen, uint8_t *plaintext, size_t *plainLen)
+{
+    *plainLen = 0;
+
+    // Minimum: 12 bytes nonce + 16 bytes tag
+    if (packetLen < 28)
+        return false;
+
+    const uint8_t *iv = packet;
+    size_t cipherLen = packetLen - 12 - 16;
+    const uint8_t *ciphertext = packet + 12;
+    const uint8_t *tag = packet + 12 + cipherLen;
+
+#if defined(ESP32)
+    if (keyLen != 32)
+        return false;
+
+    mbedtls_gcm_context gcm;
+    mbedtls_gcm_init(&gcm);
+
+    int ret = mbedtls_gcm_setkey(&gcm, MBEDTLS_CIPHER_ID_AES, key, 256);
+    if (ret != 0)
+    {
+        mbedtls_gcm_free(&gcm);
+        return false;
+    }
+
+    ret = mbedtls_gcm_auth_decrypt(&gcm, cipherLen, iv, 12, NULL, 0, tag, 16, ciphertext, plaintext);
+    mbedtls_gcm_free(&gcm);
+
+    if (ret != 0)
+        return false;
+
+    *plainLen = cipherLen;
+    return true;
+
+#elif defined(ESP8266)
+    if (keyLen != 32)
+        return false;
+
+    ChaChaPoly chacha;
+    if (!chacha.setKey(key, 32))
+        return false;
+    if (!chacha.setIV(iv, 12))
+        return false;
+
+    chacha.decrypt(plaintext, ciphertext, cipherLen);
+
+    uint8_t computedTag[16];
+    chacha.computeTag(computedTag, 16);
+
+    if (!chacha.checkTag(tag, 16))
+    {
+        memset(plaintext, 0, cipherLen);
+        return false;
+    }
+
+    *plainLen = cipherLen;
+    return true;
+#else
+    (void)iv;
+    (void)ciphertext;
+    (void)tag;
+    return false;
+#endif
+}
+
 void Firmngin::mqttCallback(char *topic, byte *payload, unsigned int length)
 {
     String payloadStr;
-    payloadStr.reserve(length);
-    for (unsigned int i = 0; i < length; i++)
+
+    // E2EE: attempt decryption if enabled and key is set
+    if (_e2eeEnabled)
     {
-        payloadStr += (char)payload[i];
+        uint8_t plainBuf[512];
+        size_t plainLen = 0;
+
+        if (decryptE2EE(payload, length, _e2eeKeyBytes, 32, plainBuf, &plainLen))
+        {
+            payloadStr.reserve(plainLen);
+            for (size_t i = 0; i < plainLen; i++)
+            {
+                payloadStr += (char)plainBuf[i];
+            }
+        }
+        else
+        {
+            Serial.println("Failed decrypting data, makesure decrypted_key is correct.");
+            return;
+        }
+    }
+    else
+    {
+        payloadStr.reserve(length);
+        for (unsigned int i = 0; i < length; i++)
+        {
+            payloadStr += (char)payload[i];
+        }
     }
 
     String topicStr = String(topic);
@@ -885,14 +968,13 @@ bool Firmngin::pushEntity(const char *key, const char *value)
     if (!_mqttClient.connected())
         return false;
 
-    JsonDocument doc;
-    doc["key"] = key;
-    doc["value"] = value;
+    char buf[256];
+    firmngin_json::Builder b(buf, sizeof(buf));
+    b.reset();
+    b.add("key", key);
+    b.add("value", value);
 
-    String payload;
-    serializeJson(doc, payload);
-
-    return _mqttClient.publish(getTopicUpdateEntity(_deviceId).c_str(), payload.c_str());
+    return _mqttClient.publish(getTopicUpdateEntity(_deviceId).c_str(), b.build());
 }
 
 bool Firmngin::pushEntity(Entity &entity, const char *value)
@@ -923,7 +1005,5 @@ bool BatchState::send()
 {
     if (_instance == nullptr)
         return false;
-    String payload;
-    serializeJson(_doc, payload);
-    return _instance->updateEntities(payload.c_str());
+    return _instance->updateEntities(_builder.build());
 }
