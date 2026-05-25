@@ -37,6 +37,22 @@
 // #define FIRMNGIN_SERVER_PORT 8883
 
 // =========================================================================
+// FIRMWARE / OTA CONFIGURATION
+// =========================================================================
+// All firmware values are set via build flags, NOT in this file.
+// PlatformIO (platformio.ini):
+//   build_flags =
+//       -D FIRMNGIN_FIRMWARE_VERSION=\"1.2.0\"
+//       -D FIRMNGIN_FIRMWARE_TARGET_MODEL=\"esp32:esp32:esp32\"
+//
+// Arduino CLI:
+//   --build-property "build.extra_flags=-DFIRMNGIN_FIRMWARE_VERSION=\"1.2.0\""
+//
+// TARGET_BOARD is auto-detected (ESP32/ESP8266), no config needed.
+// OTA_BASE_URL defaults to firmngin.dev; override only for self-hosted:
+//   build_flags = -D FIRMNGIN_OTA_BASE_URL=\"https://custom.api.com/api/v1/ota\"
+
+// =========================================================================
 // CERTIFICATES (Required for all modes)
 // =========================================================================
 
@@ -60,6 +76,15 @@ static const char PRIVATE_KEY[] PROGMEM = R"EOF(
 [Your Private Key Here]
 -----END PRIVATE KEY-----
 )EOF";
+
+// Service API CA Certificate - used for HTTPS API access (api.firmngin.dev).
+// Optional. If omitted, service API/OTA HTTPS may use insecure mode for testing.
+// #define HAS_SERVICE_CA_CERT
+// static const char SERVICE_CA_CERT[] PROGMEM = R"EOF(
+// -----BEGIN CERTIFICATE-----
+// [Your Service API CA Certificate Here]
+// -----END CERTIFICATE-----
+// )EOF";
 
 // Server Fingerprint (SHA1 - 20 bytes) - Used when USE_FINGERPRINT is defined
 static const uint8_t SERVER_FINGERPRINT_BYTES[20] PROGMEM = {

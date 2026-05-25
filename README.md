@@ -147,6 +147,15 @@ static const char PRIVATE_KEY[] PROGMEM = R"EOF(
 -----END PRIVATE KEY-----
 )EOF";
 
+// Optional: CA for HTTPS service API access such as api.firmngin.dev.
+// Generated keys.h may include this as SERVICE_CA_CERT.
+// #define HAS_SERVICE_CA_CERT
+// static const char SERVICE_CA_CERT[] PROGMEM = R"EOF(
+// -----BEGIN CERTIFICATE-----
+// [Your Service API CA Certificate]
+// -----END CERTIFICATE-----
+// )EOF";
+
 static const uint8_t SERVER_FINGERPRINT_BYTES[20] PROGMEM = {
   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00

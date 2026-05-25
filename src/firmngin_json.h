@@ -247,7 +247,7 @@ private:
 };
 
 // ==========================================================================
-// Builder: builds a JSON object {"key":"val",...} into a caller-owned buffer.
+// Builder: builds a JSON object {"k":"key","v":"val"} into a caller-owned buffer.
 // Zero heap allocation. All operations work within the provided buffer.
 // ==========================================================================
 class Builder {
@@ -309,7 +309,7 @@ private:
 };
 
 // ==========================================================================
-// ArrayBuilder: builds a JSON array [{"key":"val"},...] into a caller-owned buffer.
+// ArrayBuilder: builds a JSON array [{"k":"key","v":"val"},...] into a caller-owned buffer.
 // Zero heap allocation.
 // ==========================================================================
 class ArrayBuilder {
@@ -331,9 +331,9 @@ public:
         _inObject = false;
     }
 
-    // Add a key-value object. Returns false if buffer is full.
+    // Add a key-value object {"k":"<key>","v":"<value>"}. Returns false if buffer is full.
     bool add(const char* key, const char* value) {
-        size_t needed = 11; // {"":"",}
+        size_t needed = 17; // {"k":"","v":""},
         needed += strlen(key) * 2;
         needed += strlen(value) * 2;
 
@@ -342,7 +342,15 @@ public:
         if (_count > 0) _buf[_pos++] = ',';
         _buf[_pos++] = '{';
         _buf[_pos++] = '"';
+        _buf[_pos++] = 'k';
+        _buf[_pos++] = '"';
+        _buf[_pos++] = ':';
+        _buf[_pos++] = '"';
         _pos += _jsonEscape(key, _buf + _pos, _cap - _pos);
+        _buf[_pos++] = '"';
+        _buf[_pos++] = ',';
+        _buf[_pos++] = '"';
+        _buf[_pos++] = 'v';
         _buf[_pos++] = '"';
         _buf[_pos++] = ':';
         _buf[_pos++] = '"';

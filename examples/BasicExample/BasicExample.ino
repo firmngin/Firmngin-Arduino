@@ -263,6 +263,18 @@ void setup()
 
   // Enable debug output
   fngin.setDebug(true);
+
+  // Firmware metadata can also be supplied from keys.h via
+  // FIRMNGIN_FIRMWARE_VERSION, FIRMNGIN_FIRMWARE_TARGET_BOARD, and
+  // FIRMNGIN_FIRMWARE_TARGET_MODEL.
+#if defined(ESP8266)
+  fngin.setFirmwareInfo("1.0.0", "ESP8266", "esp8266:esp8266:generic");
+#else
+  fngin.setFirmwareInfo("1.0.0", "ESP32", "esp32:esp32:esp32");
+#endif
+  // OTA is enabled by default. Use fngin.setEnableOTA(false) to disable it.
+  // Set OTA server base URL (can also be defined via FIRMNGIN_OTA_BASE_URL in keys.h)
+  fngin.setOTABaseURL("https://api.firmngin.dev/api/v1/ota");
   
   // Set timezone (GMT+7 for Indonesia)
   fngin.setTimezone(7);
@@ -281,5 +293,7 @@ void loop()
     lastPush = millis();
     fngin.pushEntity("temperature", "25.5");
     fngin.pushEntity("gpio_1", "1");
+    fngin.syncFirmwareInfo();
+    fngin.checkOTA();
   }
 }
