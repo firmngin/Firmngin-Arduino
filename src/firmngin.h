@@ -17,17 +17,24 @@
 
 #if defined(ESP8266)
 #include <ESP8266WiFi.h>
+#include <ESP8266HTTPClient.h>
 #include <WiFiClientSecure.h>
+#include <bearssl/bearssl_hash.h>
 #define PLATFORM_SUPPORTED true
 #define PLATFORM_NAME "ESP8266"
+#define FIRMWARE_BUFFER_SIZE 4096
 #elif defined(ESP32)
 #include <WiFi.h>
+#include <HTTPClient.h>
 #include <WiFiClientSecure.h>
+#include <mbedtls/md.h>
 #define PLATFORM_SUPPORTED true
 #define PLATFORM_NAME "ESP32"
+#define FIRMWARE_BUFFER_SIZE 8192
 #else
 #define PLATFORM_SUPPORTED false
 #define PLATFORM_NAME "UNKNOWN"
+#define FIRMWARE_BUFFER_SIZE 2048
 #endif
 
 // Default MQTT Server Configuration
@@ -50,8 +57,23 @@
 #define FIRMNGIN_SERVER_PORT DEFAULT_MQTT_PORT
 #endif
 
-#define OK "on_ok"
+#ifndef FIRMNGIN_FIRMWARE_VERSION
+#define FIRMNGIN_FIRMWARE_VERSION "0.0.0"
+#endif
 
+#ifndef FIRMNGIN_FIRMWARE_TARGET_BOARD
+#define FIRMNGIN_FIRMWARE_TARGET_BOARD PLATFORM_NAME
+#endif
+
+#ifndef FIRMNGIN_FIRMWARE_TARGET_MODEL
+#define FIRMNGIN_FIRMWARE_TARGET_MODEL ""
+#endif
+
+#ifndef FIRMNGIN_OTA_BASE_URL
+#define FIRMNGIN_OTA_BASE_URL "https://api.firmngin.dev/api/v1/ota"
+#endif
+
+#define OK "on_ok"
 #define PATH_PAYMENT "pm"
 #define PATH_DEVICE_STATUS "ds"
 #define PATH_PENDING_PAYMENT "pp"
@@ -80,6 +102,15 @@ enum DeviceStateType
     PAYMENTS,
     USAGES,
     ENTITIES
+};
+
+enum OTAAsyncState
+{
+    OTA_ASYNC_IDLE,
+    OTA_ASYNC_DOWNLOADING,
+    OTA_ASYNC_VERIFYING,
+    OTA_ASYNC_INSTALLING,
+    OTA_ASYNC_FAILED
 };
 
 // State name mapping for paths
@@ -115,7 +146,7 @@ public:
     String getPayload() const { return _rawPayload; }
 };
 
-// Typed payload for verification flow (dpin + vr)
+// Typed payload for verification flow
 class Verifications
 {
 private:
@@ -142,7 +173,7 @@ public:
     String metadata() const { return _rawPayload; }
 };
 
-// Typed payload for payment flow (pp + pm)
+// Typed payload for payment flow
 class Payments
 {
 private:
@@ -172,7 +203,7 @@ public:
     void setSuccess(bool success) { _isSuccess = success; }
 };
 
-// Typed payload for usage flow (ur + le + nl)
+// Typed payload for usage flow
 class Usages
 {
 private:
@@ -207,7 +238,7 @@ public:
     void setLimitExceeded(bool exceeded) { _isLimitExceeded = exceeded; }
 };
 
-// Typed payload for device state (ds)
+// Typed payload for device state
 class DeviceStates
 {
 private:
@@ -289,6 +320,7 @@ typedef std::function<void(Usages &)> UsageCallbackFunction;
 typedef std::function<void(DeviceStates &)> DeviceStateCallbackFunction;
 typedef std::function<void(Inits &)> InitCallbackFunction;
 typedef std::function<void(EntityCommand &)> EntityCommandCallbackFunction;
+typedef std::function<void(const char *status, const char *message)> OTACallbackFunction;
 
 class Firmngin;
 
@@ -334,6 +366,7 @@ inline std::vector<EntityRegEntry> &deferredEntityRegistrations()
 
 // BatchState: Builder pattern for batch entity updates
 #define FIRMNGIN_BATCH_BUFFER_SIZE 1024
+#define FIRMNGIN_E2EE_BUFFER_SIZE (FIRMNGIN_BATCH_BUFFER_SIZE + 32)
 
 class BatchState
 {
@@ -427,14 +460,14 @@ public:
 
     void begin();
     void loop();
-	void setDebug(bool debug);
-	void setTimezone(int timezone);
-	void setDaylightOffsetSec(int daylightOffsetSec);
-	void setNtpServer(const char *ntpServer);
-	void setClient(Client &client);
-	void setMQTTServer(const char *server, int port);
-	void setInsecure(bool insecure = true);
-	bool isPlatformSupported();
+    void setDebug(bool debug);
+    void setTimezone(int timezone);
+    void setDaylightOffsetSec(int daylightOffsetSec);
+    void setNtpServer(const char *ntpServer);
+    void setClient(Client &client);
+    void setMQTTServer(const char *server, int port);
+    void setInsecure(bool insecure = true);
+    bool isPlatformSupported();
 
     void on(const char *state, StateCallbackFunction callback);
     void on(DeviceStateType state, StateCallbackFunction callback);
@@ -451,12 +484,24 @@ public:
     bool updateEntities(const char *jsonPayload);
     bool requestInit();
     BatchState pushBatchEntities();
+    void setFirmwareInfo(const char *version, const char *targetBoard, const char *targetModel);
+    void setFirmwareInfo(const char *version);
+    const char *getFirmwareVersion();
+    const char *getFirmwareTargetBoard();
+    const char *getFirmwareTargetModel();
+    bool syncFirmwareInfo();
+    void setOTABaseURL(const char *baseURL);
+    void setEnableOTA(bool enabled = true);
+    void enableOTA(bool enabled = true);
+    bool checkOTA();
+    bool performOTA(const char *manifestUrl = nullptr);
+    void onOTAStatus(OTACallbackFunction callback);
 
 private:
     const char *_deviceId;
     const char *_deviceKey;
     bool _debug;
-	unsigned long _lastMQTTAttempt;
+    unsigned long _lastMQTTAttempt;
 
 #if defined(ESP8266) || defined(ESP32)
     WiFiClientSecure _wifiClient;
@@ -464,15 +509,41 @@ private:
     WiFiClient _wifiClient;
 #endif
     PubSubClient _mqttClient;
-	unsigned long _delayRetryMQTT = 5000;
-	int maxRetryMQTT = 3;
-	int defaultQos = 1;
+    unsigned long _delayRetryMQTT = 5000;
+    int maxRetryMQTT = 3;
+    int defaultQos = 1;
 
-	String _mqttServer;
-	int _mqttPort;
-	bool _insecure = false;
-	bool _e2eeEnabled = false;
-	uint8_t _e2eeKeyBytes[32] = {0};
+    String _mqttServer;
+    int _mqttPort;
+    bool _insecure = false;
+    bool _e2eeEnabled = false;
+    uint8_t _e2eeKeyBytes[32] = {0};
+    uint8_t _e2eeKeyLen = 0;
+    String _firmwareVersion = FIRMNGIN_FIRMWARE_VERSION;
+    String _firmwareTargetBoard = FIRMNGIN_FIRMWARE_TARGET_BOARD;
+    String _firmwareTargetModel = FIRMNGIN_FIRMWARE_TARGET_MODEL;
+    bool _otaEnabled = true;
+    String _otaBaseUrl = FIRMNGIN_OTA_BASE_URL;
+    String _otaFirmwareID;
+    String _otaFirmwareSHA256;
+
+    OTAAsyncState _otaAsyncState = OTA_ASYNC_IDLE;
+    HTTPClient _otaHttp;
+    int _otaContentLength = 0;
+    int _otaDownloaded = 0;
+    int _otaLastProgressBucket = -1;
+    int _otaLastPublishedProgressBucket = -1;
+    unsigned long _otaLastDebugAt = 0;
+    uint8_t *_otaBuffer = nullptr;
+#if defined(ESP32)
+    WiFiClientSecure _otaWifiClient;
+    mbedtls_md_context_t _otaSha256Ctx;
+#elif defined(ESP8266)
+    BearSSL::WiFiClientSecure _otaWifiClient;
+    br_sha256_context _otaSha256Ctx;
+#endif
+
+    bool otaHTTPGet(const char *path, const char *queryParams, String &responseBody);
 
 #if defined(ESP8266)
     const char *_clientCert = nullptr;
@@ -495,6 +566,7 @@ private:
     InitCallbackFunction _initCallback;
     EntityCommandCallbackFunction _entityCallback;
     std::map<String, EntityCommandCallbackFunction> _entityCallbacks;
+    OTACallbackFunction _otaCallback;
 
     void _Debug(String message, bool newLine = true);
     bool connectServer();
@@ -515,9 +587,14 @@ private:
     String getTopicUpdateEntities(String deviceId);
     String getTopicRequestInit(String deviceId);
     String getTopicEntityCommand(String deviceId);
-	String getPathPing(String deviceId);
-	void syncTime();
-	void setupLWT();
+    String getPathPing(String deviceId);
+    String getOTATriggerPath(String deviceId);
+    void syncTime();
+    void setupLWT();
+    bool publishPayload(const char *topic, const char *payload, bool retained = false);
+    bool publishOTAStatus(const char *status, const char *message);
+    void _processOTA();
+    void _otaCleanup();
 };
 
 #endif // FIRMNGINKIT_H

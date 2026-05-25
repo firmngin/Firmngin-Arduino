@@ -1,5 +1,18 @@
 #include "firmngin.h"
 
+#if defined(ESP32)
+#include <esp_system.h>
+#elif defined(ESP8266)
+extern "C"
+{
+#include "user_interface.h"
+}
+#endif
+
+#if defined(ESP32) || defined(ESP8266)
+#include <Update.h>
+#endif
+
 const char *NTP_SERVER = "pool.ntp.org";
 int GMT_OFFSET_SEC = 7 * 3600;
 int DAYLIGHT_OFFSET_SEC = 0;
@@ -16,7 +29,7 @@ Firmngin::Firmngin(const char *deviceId, const char *deviceKey)
       _mqttClient(_wifiClient),
       _mqttServer(MQTT_SERVER_ADDR),
       _mqttPort(MQTT_SERVER_PORT),
-_e2eeEnabled(false)
+      _e2eeEnabled(false)
 {
     if (!PLATFORM_SUPPORTED)
     {
@@ -32,7 +45,7 @@ Firmngin::Firmngin(const char *deviceId, const char *deviceKey, const char *clie
       _mqttClient(_wifiClient),
       _mqttServer(MQTT_SERVER_ADDR),
       _mqttPort(MQTT_SERVER_PORT),
-_e2eeEnabled(false),
+      _e2eeEnabled(false),
       _clientCert(clientCert),
       _privateKey(privateKey),
       _fingerprint(fingerprint)
@@ -51,7 +64,7 @@ Firmngin::Firmngin(const char *deviceId, const char *deviceKey)
       _mqttClient(_wifiClient),
       _mqttServer(MQTT_SERVER_ADDR),
       _mqttPort(MQTT_SERVER_PORT),
-_e2eeEnabled(false)
+      _e2eeEnabled(false)
 {
     if (!PLATFORM_SUPPORTED)
     {
@@ -67,7 +80,7 @@ Firmngin::Firmngin(const char *deviceId, const char *deviceKey, const char *caCe
       _mqttClient(_wifiClient),
       _mqttServer(MQTT_SERVER_ADDR),
       _mqttPort(MQTT_SERVER_PORT),
-_e2eeEnabled(false),
+      _e2eeEnabled(false),
       _caCert(caCert),
       _clientCert(clientCert),
       _privateKey(privateKey),
@@ -87,7 +100,7 @@ Firmngin::Firmngin(const char *deviceId, const char *deviceKey, const uint8_t *f
       _mqttClient(_wifiClient),
       _mqttServer(MQTT_SERVER_ADDR),
       _mqttPort(MQTT_SERVER_PORT),
-_e2eeEnabled(false),
+      _e2eeEnabled(false),
       _caCert(nullptr),
       _clientCert(clientCert),
       _privateKey(privateKey),
@@ -107,7 +120,7 @@ Firmngin::Firmngin(const char *deviceId, const char *deviceKey)
       _mqttClient(_wifiClient),
       _mqttServer(MQTT_SERVER_ADDR),
       _mqttPort(MQTT_SERVER_PORT),
-_e2eeEnabled(false)
+      _e2eeEnabled(false)
 {
     if (!PLATFORM_SUPPORTED)
     {
@@ -209,6 +222,11 @@ String Firmngin::getPathPing(String deviceId)
     return String("/c/") + deviceId + "/" + PATH_PING;
 }
 
+String Firmngin::getOTATriggerPath(String deviceId)
+{
+    return String("/c/") + deviceId + "/ot/trg";
+}
+
 static void printBanner()
 {
     Serial.println();
@@ -232,7 +250,7 @@ void Firmngin::begin()
 
     if (WiFi.status() != WL_CONNECTED)
     {
-        Serial.println("ERROR: WiFi not connected");
+        _Debug("wifi not connected, performing restart in 2 seconds");
         delay(2000);
         ESP.restart();
         return;
@@ -285,7 +303,6 @@ void Firmngin::begin()
 
 #if defined(USE_CA_CERT) && KEYS_H_AVAILABLE
     _wifiClient.setTrustAnchors(new BearSSL::X509List(CA_CERT));
-    Serial.println("Server validation: CA Certificate (USE_CA_CERT)");
 #elif fingerprint != nullptr
     _wifiClient.setFingerprint(fingerprint);
     Serial.println("Server validation: Fingerprint");
@@ -315,6 +332,10 @@ void Firmngin::begin()
         return;
     }
 
+    _caCert = caCert;
+    _clientCert = clientCert;
+    _privateKey = privateKey;
+
     if (_insecure)
     {
         _wifiClient.setInsecure();
@@ -323,7 +344,6 @@ void Firmngin::begin()
     else if (caCert != nullptr)
     {
         _wifiClient.setCACert(caCert);
-        Serial.println("Server validation: CA Certificate");
     }
     else
     {
@@ -340,7 +360,8 @@ void Firmngin::begin()
     {
         size_t hexLen = strlen(DECRYPTOR);
         size_t keyLen = hexLen / 2;
-        if (keyLen > 32) keyLen = 32;
+        if (keyLen > 32)
+            keyLen = 32;
         for (size_t i = 0; i < keyLen; i++)
         {
             char c1 = DECRYPTOR[i * 2];
@@ -349,15 +370,14 @@ void Firmngin::begin()
             uint8_t d2 = (c2 >= 'a') ? (c2 - 'a' + 10) : (c2 >= 'A' ? c2 - 'A' + 10 : c2 - '0');
             _e2eeKeyBytes[i] = (d1 << 4) | d2;
         }
-        if (keyLen < 32) memset(_e2eeKeyBytes + keyLen, 0, 32 - keyLen);
+        _e2eeKeyLen = keyLen;
         _e2eeEnabled = true;
     }
 #endif
 
-    if (_debug)
+    if (!_e2eeEnabled && _debug)
     {
-        Serial.print("E2EE is ");
-        Serial.println(_e2eeEnabled ? "Enabled" : "Disabled");
+        Serial.println("E2EE: encryption disabled — payload publish blocked for security");
     }
 
     _mqttClient.setServer(_mqttServer.c_str(), _mqttPort);
@@ -546,7 +566,7 @@ Inits::Inits(const String &jsonPayload)
     char buf[128];
 
     size_t rawLen = 0;
-    const char* raw = p.getRaw("e", rawLen);
+    const char *raw = p.getRaw("e", rawLen);
     if (raw != nullptr && rawLen > 0)
     {
         _entitiesJson = String(raw).substring(0, rawLen);
@@ -642,6 +662,8 @@ void Firmngin::loop()
     {
         _mqttClient.loop();
     }
+
+    _processOTA();
 }
 
 void Firmngin::_Debug(String message, bool newLine)
@@ -705,10 +727,13 @@ bool Firmngin::connectServer()
                 _mqttClient.subscribe(getTopicNearLimit(_deviceId).c_str(), defaultQos);
                 _mqttClient.subscribe(getTopicEntityCommand(_deviceId).c_str(), defaultQos);
                 _mqttClient.subscribe(getPathPing(_deviceId).c_str(), defaultQos);
+                _mqttClient.subscribe(getOTATriggerPath(_deviceId).c_str(), defaultQos);
 
                 _mqttClient.publish(willTopic.c_str(), "", true);
                 delay(10);
-                _mqttClient.publish(willTopic.c_str(), "1", true);
+                publishPayload(willTopic.c_str(), "1", true);
+
+                syncFirmwareInfo();
 
                 Serial.println("Connected.");
                 return true;
@@ -764,12 +789,89 @@ bool Firmngin::connectServer()
 
     if (!_mqttClient.connected())
     {
-        Serial.println("Connection failed, restarting...");
+        _Debug("Server connection failed, performing restart...");
         delay(1000);
         ESP.restart();
     }
 
     return false;
+}
+
+static void fillE2EENonce(uint8_t *iv, size_t len)
+{
+#if defined(ESP32)
+    esp_fill_random(iv, len);
+#elif defined(ESP8266)
+    if (!os_get_random(iv, len))
+    {
+        for (size_t i = 0; i < len; i++)
+        {
+            iv[i] = (uint8_t)random(0, 256);
+        }
+    }
+#else
+    for (size_t i = 0; i < len; i++)
+    {
+        iv[i] = (uint8_t)random(0, 256);
+    }
+#endif
+}
+
+static bool encryptE2EE(const uint8_t *plaintext, size_t plainLen, const uint8_t *key, size_t keyLen, uint8_t *packet, size_t *packetLen)
+{
+    *packetLen = 0;
+
+    uint8_t *iv = packet;
+    uint8_t *ciphertext = packet + 12;
+    uint8_t *tag = packet + 12 + plainLen;
+    fillE2EENonce(iv, 12);
+
+#if defined(ESP32)
+    if (keyLen != 16 && keyLen != 32)
+        return false;
+
+    mbedtls_gcm_context gcm;
+    mbedtls_gcm_init(&gcm);
+
+    int ret = mbedtls_gcm_setkey(&gcm, MBEDTLS_CIPHER_ID_AES, key, keyLen == 16 ? 128 : 256);
+    if (ret != 0)
+    {
+        mbedtls_gcm_free(&gcm);
+        return false;
+    }
+
+    ret = mbedtls_gcm_crypt_and_tag(&gcm, MBEDTLS_GCM_ENCRYPT, plainLen, iv, 12, NULL, 0, plaintext, ciphertext, 16, tag);
+    mbedtls_gcm_free(&gcm);
+
+    if (ret != 0)
+        return false;
+
+    *packetLen = 12 + plainLen + 16;
+    return true;
+
+#elif defined(ESP8266)
+    if (keyLen != 32)
+        return false;
+
+    ChaChaPoly chacha;
+    if (!chacha.setKey(key, 32))
+        return false;
+    if (!chacha.setIV(iv, 12))
+        return false;
+
+    chacha.encrypt(ciphertext, plaintext, plainLen);
+    chacha.computeTag(tag, 16);
+
+    *packetLen = 12 + plainLen + 16;
+    return true;
+#else
+    (void)plaintext;
+    (void)plainLen;
+    (void)key;
+    (void)keyLen;
+    (void)packet;
+    return false;
+#endif
 }
 
 static bool decryptE2EE(const uint8_t *packet, size_t packetLen, const uint8_t *key, size_t keyLen, uint8_t *plaintext, size_t *plainLen)
@@ -786,27 +888,52 @@ static bool decryptE2EE(const uint8_t *packet, size_t packetLen, const uint8_t *
     const uint8_t *tag = packet + 12 + cipherLen;
 
 #if defined(ESP32)
-    if (keyLen != 32)
-        return false;
-
-    mbedtls_gcm_context gcm;
-    mbedtls_gcm_init(&gcm);
-
-    int ret = mbedtls_gcm_setkey(&gcm, MBEDTLS_CIPHER_ID_AES, key, 256);
-    if (ret != 0)
+    if (keyLen == 16)
     {
+        // AES-128-GCM
+        mbedtls_gcm_context gcm;
+        mbedtls_gcm_init(&gcm);
+
+        int ret = mbedtls_gcm_setkey(&gcm, MBEDTLS_CIPHER_ID_AES, key, 128);
+        if (ret != 0)
+        {
+            mbedtls_gcm_free(&gcm);
+            return false;
+        }
+
+        ret = mbedtls_gcm_auth_decrypt(&gcm, cipherLen, iv, 12, NULL, 0, tag, 16, ciphertext, plaintext);
         mbedtls_gcm_free(&gcm);
-        return false;
+
+        if (ret != 0)
+            return false;
+
+        *plainLen = cipherLen;
+        return true;
+    }
+    else if (keyLen == 32)
+    {
+        // AES-256-GCM
+        mbedtls_gcm_context gcm;
+        mbedtls_gcm_init(&gcm);
+
+        int ret = mbedtls_gcm_setkey(&gcm, MBEDTLS_CIPHER_ID_AES, key, 256);
+        if (ret != 0)
+        {
+            mbedtls_gcm_free(&gcm);
+            return false;
+        }
+
+        ret = mbedtls_gcm_auth_decrypt(&gcm, cipherLen, iv, 12, NULL, 0, tag, 16, ciphertext, plaintext);
+        mbedtls_gcm_free(&gcm);
+
+        if (ret != 0)
+            return false;
+
+        *plainLen = cipherLen;
+        return true;
     }
 
-    ret = mbedtls_gcm_auth_decrypt(&gcm, cipherLen, iv, 12, NULL, 0, tag, 16, ciphertext, plaintext);
-    mbedtls_gcm_free(&gcm);
-
-    if (ret != 0)
-        return false;
-
-    *plainLen = cipherLen;
-    return true;
+    return false;
 
 #elif defined(ESP8266)
     if (keyLen != 32)
@@ -849,7 +976,7 @@ void Firmngin::mqttCallback(char *topic, byte *payload, unsigned int length)
         uint8_t plainBuf[512];
         size_t plainLen = 0;
 
-        if (decryptE2EE(payload, length, _e2eeKeyBytes, 32, plainBuf, &plainLen))
+        if (decryptE2EE(payload, length, _e2eeKeyBytes, _e2eeKeyLen, plainBuf, &plainLen))
         {
             payloadStr.reserve(plainLen);
             for (size_t i = 0; i < plainLen; i++)
@@ -859,7 +986,7 @@ void Firmngin::mqttCallback(char *topic, byte *payload, unsigned int length)
         }
         else
         {
-            Serial.println("Failed decrypting data, makesure decrypted_key is correct.");
+            Serial.println("E2EE: decryption failed — verify DECRYPTOR key in keys.h matches the server key");
             return;
         }
     }
@@ -942,7 +1069,21 @@ void Firmngin::mqttCallback(char *topic, byte *payload, unsigned int length)
     if (stateType == "pi")
     {
         String pongTopic = "/d/" + String(_deviceId) + "/" + PATH_PONG;
-        _mqttClient.publish(pongTopic.c_str(), payloadStr.c_str());
+        publishPayload(pongTopic.c_str(), payloadStr.c_str());
+    }
+
+    if (topicStr.indexOf("/ot/trg") >= 0)
+    {
+        if (_otaAsyncState != OTA_ASYNC_IDLE)
+        {
+            _Debug("OTA trigger ignored, download already in progress");
+            return;
+        }
+
+        _Debug("OTA signal received, performing OTA update...", true);
+        _otaFirmwareID = "";
+        publishOTAStatus("triggered", "Remote OTA triggered by dashboard");
+        performOTA();
     }
 
     if (topicStr.indexOf("/rs/") >= 0)
@@ -963,6 +1104,29 @@ void Firmngin::mqttCallback(char *topic, byte *payload, unsigned int length)
     }
 }
 
+bool Firmngin::publishPayload(const char *topic, const char *payload, bool retained)
+{
+    if (!_mqttClient.connected())
+        return false;
+
+    if (!_e2eeEnabled || _e2eeKeyLen == 0)
+    {
+        _Debug("E2EE not configured — payload publish blocked for security", true);
+        return false;
+    }
+
+    size_t payloadLen = strlen(payload);
+    if (payloadLen + 28 > FIRMNGIN_E2EE_BUFFER_SIZE)
+        return false;
+
+    uint8_t encrypted[FIRMNGIN_E2EE_BUFFER_SIZE];
+    size_t encryptedLen = 0;
+    if (!encryptE2EE((const uint8_t *)payload, payloadLen, _e2eeKeyBytes, _e2eeKeyLen, encrypted, &encryptedLen))
+        return false;
+
+    return _mqttClient.publish(topic, encrypted, encryptedLen, retained);
+}
+
 bool Firmngin::pushEntity(const char *key, const char *value)
 {
     if (!_mqttClient.connected())
@@ -971,10 +1135,10 @@ bool Firmngin::pushEntity(const char *key, const char *value)
     char buf[256];
     firmngin_json::Builder b(buf, sizeof(buf));
     b.reset();
-    b.add("key", key);
-    b.add("value", value);
+    b.add("k", key);
+    b.add("v", value);
 
-    return _mqttClient.publish(getTopicUpdateEntity(_deviceId).c_str(), b.build());
+    return publishPayload(getTopicUpdateEntity(_deviceId).c_str(), b.build());
 }
 
 bool Firmngin::pushEntity(Entity &entity, const char *value)
@@ -986,14 +1150,683 @@ bool Firmngin::updateEntities(const char *jsonPayload)
 {
     if (!_mqttClient.connected())
         return false;
-    return _mqttClient.publish(getTopicUpdateEntities(_deviceId).c_str(), jsonPayload);
+    return publishPayload(getTopicUpdateEntities(_deviceId).c_str(), jsonPayload);
 }
 
 bool Firmngin::requestInit()
 {
     if (!_mqttClient.connected())
         return false;
-    return _mqttClient.publish(getTopicRequestInit(_deviceId).c_str(), "{}");
+    return publishPayload(getTopicRequestInit(_deviceId).c_str(), "{}");
+}
+
+void Firmngin::setFirmwareInfo(const char *version, const char *targetBoard, const char *targetModel)
+{
+    if (version != nullptr)
+        _firmwareVersion = version;
+    if (targetBoard != nullptr)
+        _firmwareTargetBoard = targetBoard;
+    if (targetModel != nullptr)
+        _firmwareTargetModel = targetModel;
+}
+
+void Firmngin::setFirmwareInfo(const char *version)
+{
+    if (version != nullptr)
+        _firmwareVersion = version;
+}
+
+const char *Firmngin::getFirmwareVersion()
+{
+    return _firmwareVersion.c_str();
+}
+
+const char *Firmngin::getFirmwareTargetBoard()
+{
+    return _firmwareTargetBoard.c_str();
+}
+
+const char *Firmngin::getFirmwareTargetModel()
+{
+    return _firmwareTargetModel.c_str();
+}
+
+bool Firmngin::syncFirmwareInfo()
+{
+    if (!_mqttClient.connected())
+        return false;
+
+    String value = "{\"v\":\"" + _firmwareVersion + "\",\"b\":\"" + _firmwareTargetBoard + "\",\"m\":\"" + _firmwareTargetModel + "\"}";
+
+    return pushEntity("versioning_firmware", value.c_str());
+}
+
+#if defined(ESP32)
+
+static String hmacSHA256(const char *key, const char *message)
+{
+    uint8_t hmacResult[32];
+    mbedtls_md_context_t ctx;
+    mbedtls_md_init(&ctx);
+    mbedtls_md_setup(&ctx, mbedtls_md_info_from_type(MBEDTLS_MD_SHA256), 1);
+    mbedtls_md_hmac_starts(&ctx, (const unsigned char *)key, strlen(key));
+    mbedtls_md_hmac_update(&ctx, (const unsigned char *)message, strlen(message));
+    mbedtls_md_hmac_finish(&ctx, hmacResult);
+    mbedtls_md_free(&ctx);
+
+    char hex[65];
+    for (int i = 0; i < 32; i++)
+        sprintf(hex + (i * 2), "%02x", hmacResult[i]);
+    hex[64] = '\0';
+    return String(hex);
+}
+
+#elif defined(ESP8266)
+
+static String hmacSHA256(const char *key, const char *message)
+{
+    uint8_t keyBlock[64];
+    memset(keyBlock, 0, sizeof(keyBlock));
+    size_t keyLen = strlen(key);
+    if (keyLen > 64)
+    {
+        br_sha256_context sha;
+        br_sha256_init(&sha);
+        br_sha256_update(&sha, key, keyLen);
+        br_sha256_out(&sha, keyBlock);
+        keyLen = 32;
+    }
+    else
+    {
+        memcpy(keyBlock, key, keyLen);
+    }
+
+    uint8_t oKeyPad[64];
+    uint8_t iKeyPad[64];
+    for (int i = 0; i < 64; i++)
+    {
+        oKeyPad[i] = keyBlock[i] ^ 0x5c;
+        iKeyPad[i] = keyBlock[i] ^ 0x36;
+    }
+
+    br_sha256_context sha;
+    uint8_t innerHash[32];
+    br_sha256_init(&sha);
+    br_sha256_update(&sha, iKeyPad, 64);
+    br_sha256_update(&sha, message, strlen(message));
+    br_sha256_out(&sha, innerHash);
+
+    uint8_t hmacResult[32];
+    br_sha256_init(&sha);
+    br_sha256_update(&sha, oKeyPad, 64);
+    br_sha256_update(&sha, innerHash, 32);
+    br_sha256_out(&sha, hmacResult);
+
+    char hex[65];
+    for (int i = 0; i < 32; i++)
+        sprintf(hex + (i * 2), "%02x", hmacResult[i]);
+    hex[64] = '\0';
+    return String(hex);
+}
+
+#endif
+
+void Firmngin::setOTABaseURL(const char *baseURL)
+{
+    _otaBaseUrl = baseURL != nullptr ? baseURL : "";
+}
+
+void Firmngin::setEnableOTA(bool enabled)
+{
+    _otaEnabled = enabled;
+}
+
+void Firmngin::enableOTA(bool enabled)
+{
+    setEnableOTA(enabled);
+}
+
+bool Firmngin::otaHTTPGet(const char *path, const char *queryParams, String &responseBody)
+{
+    String fullPath = String(path);
+    if (queryParams != nullptr && strlen(queryParams) > 0)
+    {
+        fullPath += "?";
+        fullPath += queryParams;
+    }
+
+    String url = _otaBaseUrl + fullPath;
+
+    unsigned long ts = time(nullptr);
+    String message = String(_deviceId) + "." + String(ts) + ".GET." + fullPath;
+
+#if defined(ESP8266) || defined(ESP32)
+    HTTPClient http;
+#if defined(ESP32)
+    WiFiClientSecure otaClient;
+    if (_insecure)
+    {
+        otaClient.setInsecure();
+    }
+    else
+    {
+#if defined(HAS_SERVICE_CA_CERT)
+        otaClient.setCACert(SERVICE_CA_CERT);
+#else
+        publishOTAStatus("failed", "Service CA certificate is not configured");
+        return false;
+#endif
+    }
+    if (_clientCert != nullptr)
+        otaClient.setCertificate(_clientCert);
+    if (_privateKey != nullptr)
+        otaClient.setPrivateKey(_privateKey);
+#elif defined(ESP8266)
+    BearSSL::WiFiClientSecure otaClient;
+    otaClient.setBufferSizes(512, 512);
+    if (_clientCertList != nullptr && _clientPrivKey != nullptr)
+        otaClient.setClientRSACert(_clientCertList, _clientPrivKey);
+#if defined(HAS_SERVICE_CA_CERT)
+    BearSSL::X509List serviceCACert(SERVICE_CA_CERT);
+    otaClient.setTrustAnchors(&serviceCACert);
+#else
+    publishOTAStatus("failed", "Service CA certificate is not configured");
+    return false;
+#endif
+#endif
+    if (!http.begin(otaClient, url))
+    {
+        publishOTAStatus("failed", "Manifest HTTP client initialization failed");
+        return false;
+    }
+    http.addHeader("X-Device-ID", String(_deviceId));
+    http.addHeader("X-Device-Timestamp", String(ts));
+    http.addHeader("X-Device-Signature", hmacSHA256(_deviceKey, message.c_str()));
+    http.addHeader("Accept", "application/json");
+
+    int httpCode = http.GET();
+    bool ok = (httpCode == HTTP_CODE_OK);
+    if (ok)
+        responseBody = http.getString();
+    else
+    {
+        _Debug("OTA HTTP " + String(httpCode) + ": " + url);
+        _Debug("OTA HTTP error: " + http.errorToString(httpCode));
+    }
+
+    http.end();
+    return ok;
+#else
+    (void)responseBody;
+    return false;
+#endif
+}
+
+bool Firmngin::checkOTA()
+{
+    if (!_otaEnabled)
+        return publishOTAStatus("disabled", "OTA is not enabled");
+
+    if (_otaBaseUrl.length() == 0)
+        return publishOTAStatus("skipped", "OTA base URL is not configured");
+
+    publishOTAStatus("checking", "Requesting manifest");
+
+    char query[256];
+    int pos = 0;
+    if (_firmwareTargetBoard.length() > 0) {
+        pos += snprintf(query + pos, sizeof(query) - pos,
+                        "target_board=%s&", _firmwareTargetBoard.c_str());
+    }
+    if (_firmwareTargetModel.length() > 0) {
+        pos += snprintf(query + pos, sizeof(query) - pos,
+                        "target_model=%s&", _firmwareTargetModel.c_str());
+    }
+    pos += snprintf(query + pos, sizeof(query) - pos,
+                    "current_version=%s", _firmwareVersion.c_str());
+
+    String body;
+    if (!otaHTTPGet("/manifest", query, body))
+    {
+        publishOTAStatus("failed", "Manifest request failed");
+        return false;
+    }
+
+    int idStart = body.indexOf("\"firmware_id\":\"");
+    int verStart = body.indexOf("\"version\":\"");
+    int shaStart = body.indexOf("\"sha256\":\"");
+
+    if (idStart < 0)
+    {
+        publishOTAStatus("uptodate", "No update available");
+        return true;
+    }
+
+    idStart += 15;
+    _otaFirmwareID = body.substring(idStart, body.indexOf("\"", idStart));
+    verStart += 11;
+    String newVer = body.substring(verStart, body.indexOf("\"", verStart));
+    shaStart += 10;
+    _otaFirmwareSHA256 = body.substring(shaStart, body.indexOf("\"", shaStart));
+
+    char msg[128];
+    snprintf(msg, sizeof(msg), "Update available: %s", newVer.c_str());
+    publishOTAStatus("available", msg);
+    return true;
+}
+
+bool Firmngin::performOTA(const char *manifestUrl)
+{
+    (void)manifestUrl;
+
+    if (_otaAsyncState != OTA_ASYNC_IDLE)
+        return publishOTAStatus("skipped", "OTA already in progress");
+
+    if (!_otaEnabled)
+    {
+        _otaAsyncState = OTA_ASYNC_IDLE;
+        _otaFirmwareID = "";
+        return publishOTAStatus("disabled", "OTA is not enabled");
+    }
+
+    if (_otaFirmwareID.length() == 0)
+    {
+        if (!checkOTA())
+        {
+            _otaAsyncState = OTA_ASYNC_IDLE;
+            _otaFirmwareID = "";
+            return false;
+        }
+    }
+
+    if (_otaFirmwareID.length() == 0)
+    {
+        _otaAsyncState = OTA_ASYNC_IDLE;
+        _otaFirmwareID = "";
+        return publishOTAStatus("skipped", "No firmware available");
+    }
+
+    publishOTAStatus("downloading", "Starting firmware download");
+
+    String downloadPath = String("/firmware/") + _otaFirmwareID + "/download";
+
+#if defined(ESP8266) || defined(ESP32)
+    String url = _otaBaseUrl + downloadPath;
+#if defined(ESP32)
+    if (_insecure)
+    {
+        _otaWifiClient.setInsecure();
+    }
+    else
+    {
+#if defined(HAS_SERVICE_CA_CERT)
+        _otaWifiClient.setCACert(SERVICE_CA_CERT);
+#else
+        _otaAsyncState = OTA_ASYNC_IDLE;
+        publishOTAStatus("failed", "Service CA certificate is not configured");
+        _otaFirmwareID = "";
+        return false;
+#endif
+    }
+    if (_clientCert != nullptr)
+        _otaWifiClient.setCertificate(_clientCert);
+    if (_privateKey != nullptr)
+        _otaWifiClient.setPrivateKey(_privateKey);
+#elif defined(ESP8266)
+    _otaWifiClient.setBufferSizes(512, 512);
+    if (_clientCertList != nullptr && _clientPrivKey != nullptr)
+        _otaWifiClient.setClientRSACert(_clientCertList, _clientPrivKey);
+#if defined(HAS_SERVICE_CA_CERT)
+    {
+        BearSSL::X509List *ta = new BearSSL::X509List(SERVICE_CA_CERT);
+        _otaWifiClient.setTrustAnchors(ta);
+    }
+#else
+    _otaAsyncState = OTA_ASYNC_IDLE;
+    publishOTAStatus("failed", "Service CA certificate is not configured");
+    _otaFirmwareID = "";
+    return false;
+#endif
+#endif
+    if (!_otaHttp.begin(_otaWifiClient, url))
+    {
+        _otaAsyncState = OTA_ASYNC_IDLE;
+        publishOTAStatus("failed", "Firmware HTTP client initialization failed");
+        _otaFirmwareID = "";
+        return false;
+    }
+
+    unsigned long ts = time(nullptr);
+    String message = String(_deviceId) + "." + String(ts) + ".GET." + downloadPath;
+    _otaHttp.addHeader("X-Device-ID", String(_deviceId));
+    _otaHttp.addHeader("X-Device-Timestamp", String(ts));
+    _otaHttp.addHeader("X-Device-Signature", hmacSHA256(_deviceKey, message.c_str()));
+
+    int httpCode = _otaHttp.GET();
+    if (httpCode != HTTP_CODE_OK)
+    {
+        _Debug("OTA download HTTP " + String(httpCode));
+        _Debug("OTA download error: " + _otaHttp.errorToString(httpCode));
+        _otaHttp.end();
+        _otaAsyncState = OTA_ASYNC_IDLE;
+        publishOTAStatus("failed", "Firmware download failed");
+        _otaFirmwareID = "";
+        return false;
+    }
+
+    _otaContentLength = _otaHttp.getSize();
+    if (_debug)
+    {
+        Serial.print("OTA download started (async). Size: ");
+        Serial.print(_otaContentLength >= 0 ? String(_otaContentLength / 1024) : String("unknown"));
+        if (_otaContentLength >= 0)
+            Serial.println(" KB");
+        else
+            Serial.println();
+    }
+
+    _otaBuffer = (uint8_t *)malloc(FIRMWARE_BUFFER_SIZE);
+    if (_otaBuffer == nullptr)
+    {
+        _otaHttp.end();
+        _otaAsyncState = OTA_ASYNC_IDLE;
+        publishOTAStatus("failed", "Firmware buffer allocation failed");
+        _otaFirmwareID = "";
+        return false;
+    }
+    _otaDownloaded = 0;
+    _otaLastProgressBucket = -1;
+    _otaLastPublishedProgressBucket = -1;
+    _otaLastDebugAt = 0;
+
+#if defined(ESP32)
+    mbedtls_md_init(&_otaSha256Ctx);
+    mbedtls_md_setup(&_otaSha256Ctx, mbedtls_md_info_from_type(MBEDTLS_MD_SHA256), 0);
+    mbedtls_md_starts(&_otaSha256Ctx);
+#elif defined(ESP8266)
+    br_sha256_init(&_otaSha256Ctx);
+#endif
+
+    if (_otaContentLength > 0 && !Update.begin(_otaContentLength))
+    {
+        if (_debug)
+            Serial.println("OTA Update.begin() failed: " + String(Update.getError()));
+        _otaCleanup();
+        publishOTAStatus("failed", "Update.begin() failed");
+        _otaFirmwareID = "";
+        return false;
+    }
+
+    _otaAsyncState = OTA_ASYNC_DOWNLOADING;
+    return true;
+#else
+    _otaAsyncState = OTA_ASYNC_IDLE;
+    _otaFirmwareID = "";
+    return publishOTAStatus("skipped", "Platform not supported for HTTP OTA");
+#endif
+}
+
+void Firmngin::_processOTA()
+{
+    if (_otaAsyncState == OTA_ASYNC_IDLE || _otaAsyncState == OTA_ASYNC_FAILED)
+        return;
+
+    if (_otaAsyncState == OTA_ASYNC_DOWNLOADING)
+    {
+        WiFiClient *stream = _otaHttp.getStreamPtr();
+        if (stream == nullptr)
+        {
+            _otaCleanup();
+            publishOTAStatus("failed", "HTTP stream lost");
+            _otaFirmwareID = "";
+            return;
+        }
+
+        size_t available = stream->available();
+        if (available == 0)
+        {
+            if (!_otaHttp.connected())
+                _otaAsyncState = OTA_ASYNC_VERIFYING;
+            return;
+        }
+
+        int toRead = min((int)available, FIRMWARE_BUFFER_SIZE);
+        int readLen = stream->readBytes(_otaBuffer, toRead);
+        if (readLen <= 0)
+        {
+            if (!_otaHttp.connected())
+                _otaAsyncState = OTA_ASYNC_VERIFYING;
+            return;
+        }
+
+        _otaDownloaded += readLen;
+
+        yield();
+
+#if defined(ESP32)
+        mbedtls_md_update(&_otaSha256Ctx, _otaBuffer, readLen);
+#elif defined(ESP8266)
+        br_sha256_update(&_otaSha256Ctx, _otaBuffer, readLen);
+#endif
+
+        if (_otaContentLength > 0)
+        {
+            size_t written = Update.write(_otaBuffer, readLen);
+            if (written != (size_t)readLen)
+            {
+                if (_debug)
+                    Serial.println("OTA Update.write() failed: " + String(Update.getError()));
+                Update.abort();
+                _otaCleanup();
+                publishOTAStatus("failed", "Firmware write failed");
+                _otaFirmwareID = "";
+                return;
+            }
+
+            int progress = (_otaDownloaded * 100) / _otaContentLength;
+            int progressBucket = progress / 10;
+
+            if (progressBucket != _otaLastPublishedProgressBucket || progress == 100)
+            {
+                _otaLastPublishedProgressBucket = progressBucket;
+                char progressValue[8];
+                snprintf(progressValue, sizeof(progressValue), "%d", progress);
+                char progressPayload[160];
+                firmngin_json::ArrayBuilder b(progressPayload, sizeof(progressPayload));
+                b.reset();
+                b.add("ots", "downloading");
+                b.add("otp", progressValue);
+                if (_otaFirmwareID.length() > 0)
+                    b.add("ofd", _otaFirmwareID.c_str());
+                updateEntities(b.build());
+            }
+
+            if (_debug)
+            {
+                if (progressBucket != _otaLastProgressBucket || progress == 100)
+                {
+                    _otaLastProgressBucket = progressBucket;
+                    Serial.print("OTA download progress: ");
+                    Serial.print(progress);
+                    Serial.print("% (");
+                    Serial.print(_otaDownloaded / 1024);
+                    Serial.print("/");
+                    Serial.print(_otaContentLength / 1024);
+                    Serial.println(" KB)");
+                }
+            }
+        }
+        else if (_debug && millis() - _otaLastDebugAt > 1000)
+        {
+            _otaLastDebugAt = millis();
+            Serial.print("OTA download received: ");
+            Serial.print(_otaDownloaded / 1024);
+            Serial.println(" KB");
+        }
+        else if (millis() - _otaLastDebugAt > 1000)
+        {
+            _otaLastDebugAt = millis();
+            char messageValue[48];
+            snprintf(messageValue, sizeof(messageValue), "Downloaded %d KB", _otaDownloaded / 1024);
+            char progressPayload[160];
+            firmngin_json::ArrayBuilder b(progressPayload, sizeof(progressPayload));
+            b.reset();
+            b.add("ots", "downloading");
+            b.add("otp", messageValue);
+            if (_otaFirmwareID.length() > 0)
+                b.add("ofd", _otaFirmwareID.c_str());
+            updateEntities(b.build());
+
+            if (_debug)
+            {
+                Serial.print("OTA download received: ");
+                Serial.print(_otaDownloaded / 1024);
+                Serial.println(" KB");
+            }
+        }
+
+        if (_otaContentLength > 0 && _otaDownloaded >= _otaContentLength)
+        {
+            _otaAsyncState = OTA_ASYNC_VERIFYING;
+        }
+        else
+        {
+            if (_otaHttp.connected() || _otaContentLength < 0 || _otaDownloaded < _otaContentLength)
+                return;
+
+            _otaAsyncState = OTA_ASYNC_VERIFYING;
+        }
+    }
+
+    if (_otaAsyncState == OTA_ASYNC_VERIFYING)
+    {
+        _otaHttp.end();
+
+        if (_otaContentLength > 0 && _otaDownloaded != _otaContentLength)
+        {
+            Update.abort();
+            _otaCleanup();
+            publishOTAStatus("failed", "Firmware download incomplete");
+            _otaFirmwareID = "";
+            return;
+        }
+
+#if defined(ESP32)
+        uint8_t computedHash[32];
+        mbedtls_md_finish(&_otaSha256Ctx, computedHash);
+        mbedtls_md_free(&_otaSha256Ctx);
+#elif defined(ESP8266)
+        uint8_t computedHash[32];
+        br_sha256_out(&_otaSha256Ctx, computedHash);
+#endif
+
+#if defined(ESP32) || defined(ESP8266)
+        char computedHex[65];
+        for (int i = 0; i < 32; i++)
+            sprintf(computedHex + (i * 2), "%02x", computedHash[i]);
+        computedHex[64] = '\0';
+
+        if (_otaFirmwareSHA256.length() > 0 && _otaFirmwareSHA256 != computedHex)
+        {
+            if (_debug)
+            {
+                Serial.print("OTA SHA256 mismatch: expected ");
+                Serial.print(_otaFirmwareSHA256);
+                Serial.print(", got ");
+                Serial.println(computedHex);
+            }
+            Update.abort();
+            _otaCleanup();
+            publishOTAStatus("failed", "SHA256 mismatch");
+            _otaFirmwareID = "";
+            return;
+        }
+
+        if (_debug)
+        {
+            Serial.print("OTA SHA256 verified OK: ");
+            Serial.println(computedHex);
+        }
+#endif
+        _otaAsyncState = OTA_ASYNC_INSTALLING;
+    }
+
+    if (_otaAsyncState == OTA_ASYNC_INSTALLING)
+    {
+        if (_debug)
+        {
+            Serial.print("OTA download completed: ");
+            Serial.print(_otaDownloaded / 1024);
+            Serial.println(" KB");
+        }
+
+        if (!Update.end())
+        {
+            if (_debug)
+                Serial.println("OTA Update.end() failed: " + String(Update.getError()));
+            _otaCleanup();
+            publishOTAStatus("failed", "Update.end() failed");
+            _otaFirmwareID = "";
+            return;
+        }
+
+        publishOTAStatus("installed", "OTA complete - reboot to apply");
+        _otaFirmwareID = "";
+
+        free(_otaBuffer);
+        _otaBuffer = nullptr;
+        _otaAsyncState = OTA_ASYNC_IDLE;
+
+        if (_debug)
+            Serial.println("OTA installed successfully, rebooting...");
+        delay(500);
+        ESP.restart();
+    }
+}
+
+void Firmngin::_otaCleanup()
+{
+    _otaAsyncState = OTA_ASYNC_FAILED;
+    _otaHttp.end();
+    if (_otaBuffer != nullptr)
+    {
+        free(_otaBuffer);
+        _otaBuffer = nullptr;
+    }
+#if defined(ESP32)
+    mbedtls_md_free(&_otaSha256Ctx);
+#endif
+    _otaDownloaded = 0;
+    _otaContentLength = 0;
+}
+
+void Firmngin::onOTAStatus(OTACallbackFunction callback)
+{
+    _otaCallback = callback;
+}
+
+bool Firmngin::publishOTAStatus(const char *status, const char *message)
+{
+    if (_debug)
+    {
+        Serial.print("OTA status: ");
+        Serial.print(status);
+        Serial.print(" - ");
+        Serial.println(message);
+    }
+
+    if (_otaCallback)
+        _otaCallback(status, message);
+
+    char buf[512];
+    firmngin_json::ArrayBuilder b(buf, sizeof(buf));
+    b.reset();
+    b.add("ots", status);
+    b.add("otp", message);
+    if (_otaFirmwareID.length() > 0)
+        b.add("ofd", _otaFirmwareID.c_str());
+
+    return updateEntities(b.build());
 }
 
 BatchState Firmngin::pushBatchEntities()
