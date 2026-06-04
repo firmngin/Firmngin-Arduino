@@ -1489,18 +1489,6 @@ void Firmngin::setFirmwareInfo(const char *version, const char *targetBoard, con
     if (targetModel != nullptr)
         _firmwareTargetModel = targetModel;
 
-    if (_debug)
-    {
-        Serial.print(F("[firmngin] setFirmwareInfo: v="));
-        Serial.print(_firmwareVersion);
-        Serial.print(F(", board="));
-        Serial.print(_firmwareTargetBoard);
-        Serial.print(F(", model="));
-        Serial.print(_firmwareTargetModel);
-        Serial.print(F(", connected="));
-        Serial.println(_mqttClient.connected() ? F("yes → syncing") : F("no → deferred"));
-    }
-
     // Auto-sync to server if already connected so the versioning_firmware
     // entity is updated immediately without waiting for a reconnect.
     if (_mqttClient.connected())
@@ -1513,14 +1501,6 @@ void Firmngin::setFirmwareInfo(const char *version)
 {
     if (version != nullptr)
         _firmwareVersion = version;
-
-    if (_debug)
-    {
-        Serial.print(F("[firmngin] setFirmwareInfo: v="));
-        Serial.print(_firmwareVersion);
-        Serial.print(F(", connected="));
-        Serial.println(_mqttClient.connected() ? F("yes → syncing") : F("no → deferred"));
-    }
 
     // Auto-sync to server if already connected.
     if (_mqttClient.connected())
@@ -1656,6 +1636,8 @@ static String hmacSHA256(const char *key, const char *message)
 
 #endif
 
+#if 0
+// OTA implementation moved to ota.cpp.
 void Firmngin::setOTABaseURL(const char *baseURL)
 {
     _otaBaseUrl = baseURL != nullptr ? baseURL : "";
@@ -2290,6 +2272,7 @@ bool Firmngin::publishOTAStatus(const char *status, const char *message)
 
     return updateEntities(b.build());
 }
+#endif
 
 // ==================== CAMERA IMAGE UPLOAD ====================
 
@@ -2479,6 +2462,8 @@ bool BatchState::send()
     return _instance->updateEntities(_builder.build());
 }
 
+#if 0
+// Persistent queue implementation moved to queue.cpp.
 void Firmngin::setQueueEnabled(bool enabled)
 {
     _queueEnabled = enabled;
@@ -2862,3 +2847,4 @@ void Firmngin::_drainQueue()
         Serial.println(failed);
     }
 }
+#endif

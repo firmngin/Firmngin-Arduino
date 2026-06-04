@@ -58,9 +58,25 @@ cp "$ROOT_DIR/README.md" "$RELEASE_DIR/" 2>/dev/null || echo "README.md not foun
 cp "$ROOT_DIR/CHANGELOG.md" "$RELEASE_DIR/" 2>/dev/null || echo "CHANGELOG.md not found"
 
 # Copy source files
-cp "$ROOT_DIR/src/firmngin.h" "$RELEASE_DIR/src/" 2>/dev/null || echo "firmngin.h not found"
-cp "$ROOT_DIR/src/firmngin.cpp" "$RELEASE_DIR/src/" 2>/dev/null || echo "firmngin.cpp not found"
-cp "$ROOT_DIR/src/firmngin_json.h" "$RELEASE_DIR/src/" 2>/dev/null || echo "firmngin_json.h not found"
+SOURCE_FILES=(
+    "firmngin.h"
+    "firmngin.cpp"
+    "json.h"
+    "crypto.h"
+    "crypto.cpp"
+    "hmac.h"
+    "hmac.cpp"
+    "ota.cpp"
+    "ota_progress.h"
+    "ota_progress.cpp"
+    "queue.cpp"
+    "queue_format.h"
+    "queue_format.cpp"
+)
+
+for source_file in "${SOURCE_FILES[@]}"; do
+    cp "$ROOT_DIR/src/$source_file" "$RELEASE_DIR/src/" 2>/dev/null || echo "$source_file not found"
+done
 
 # Copy bundled PubSubClient
 mkdir -p "$RELEASE_DIR/src/PubSubClient"
