@@ -11,3 +11,5 @@ releases/
 # User credentials - NEVER commit these!
 **/keys.h
 !src/keys.h.template
+# Local Pi runtime state
+.atl/

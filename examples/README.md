@@ -28,6 +28,12 @@ This folder contains examples for using the Firmngin library.
 - Ends current session with `s.endSession()`
 - Uses device-side entity logic
 
+### GPSTrackerExample
+- GPS tracking with TinyGPS++ and `pushBatchEntities()`
+- Sends `lat` and `lon` every 10 seconds
+- Compatible with NEO-6M, NEO-8M, and similar GPS modules
+- No library changes needed — zero library overhead
+
 ### AdvancedExample (Coming Soon)
 - Advanced JSON parsing
 - Complex device logic

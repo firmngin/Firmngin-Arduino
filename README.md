@@ -23,7 +23,6 @@ Add to your `platformio.ini`:
 
 ```ini
 lib_deps =
-    bblanchon/ArduinoJson @ ^7.4.3
     knolleary/PubSubClient @ ^2.8.0
 ```
 
@@ -34,7 +33,6 @@ Copy `src/firmngin.h` and `src/firmngin.cpp` to your project.
 ### Arduino IDE
 
 1. Install dependencies via Library Manager:
-   - **ArduinoJson** by Benoit Blanchon
    - **PubSubClient** by Nick O'Leary
 2. Install the library, then add your optional `keys.h` file next to your sketch if you use mTLS.
 
@@ -449,12 +447,20 @@ fngin.on(INIT, [](Inits &i) {
 
 ```bash
 # Edit library in src/
-# Sync to example
+# Sync to example (legacy BasicExample copy)
 python3 sync_lib.py
 
-# Build example
+# Sync VERSION -> library.properties + library.json
+python3 scripts/sync_version.py
+
+# Native unit tests (JSON, queue format, OTA progress)
+cd test/native && pio test -e native -v
+
+# Build firmware example
 pio run -e esp32dev
 ```
+
+CI runs version check, native tests, and ESP32/ESP8266 builds on every push/PR. See `docs/VERSIONING.md` for semver and `depends` policy.
 
 ## API Reference
 
