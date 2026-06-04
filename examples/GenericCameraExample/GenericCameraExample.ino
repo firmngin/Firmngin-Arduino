@@ -66,7 +66,7 @@ bool uploadFromSDCard(const char *filename) {
     file.close();
 
     // Upload to backend
-    bool result = fngin.uploadImage(
+    bool result = fngin.uploadImage("sd_card_image",
         buffer,
         fileSize,
         "image/jpeg",
@@ -96,7 +96,7 @@ const size_t sample_jpeg_len = sizeof(sample_jpeg);
 void uploadSampleImage() {
     Serial.println("[EXAMPLE] Uploading sample image...");
     
-    bool sent = fngin.uploadImage(
+    bool sent = fngin.uploadImage("sample_image",
         (uint8_t *)sample_jpeg,
         sample_jpeg_len,
         "image/jpeg",

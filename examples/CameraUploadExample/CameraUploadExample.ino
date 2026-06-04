@@ -245,7 +245,7 @@ ON_ENTITY(cameraTrigger, [](EntityCommand &cmd) {
     
     if (captureImage()) {
         // Upload immediately when triggered by automation
-        fngin.uploadImage(
+        fngin.uploadImage("camera_image",
             lastFrame->buf,
             lastFrame->len,
             "image/jpeg",
@@ -335,7 +335,7 @@ void loop() {
             // Upload image to backend
             Serial.printf("[LOOP] Uploading %d bytes...\n", lastFrame->len);
             
-            bool sent = fngin.uploadImage(
+            bool sent = fngin.uploadImage("camera_image",
                 lastFrame->buf,
                 lastFrame->len,
                 "image/jpeg",

@@ -69,6 +69,12 @@ ON_ENTITY_S("status", [](EntityCommand &cmd) {
   Serial.println(cmd.value());
 });
 
+ON_ACTIVE_SESSION(s) {
+  if (s.entity(temperature).toFloat() >= 40.0) {
+    s.endSession();
+  }
+}
+
 void setup() {
   Serial.begin(115200);
 
@@ -97,6 +103,27 @@ void loop() {
   }
 }
 ```
+
+### Device Local End Session
+
+Use `ON_ACTIVE_SESSION` for local sensor, energy, or device-state rules. The callback runs only when the library knows the current order and the device status is `on_active_service`.
+
+```cpp
+Entity energy("energy_kwh");
+
+ON_ACTIVE_SESSION(s) {
+  if (s.entity(energy).toFloat() >= 10.0) {
+    stopMachine();
+    s.endSession();
+  }
+}
+
+void setup() {
+  fngin.begin();
+}
+```
+
+`s.endSession()` publishes a device-local end request with debounce. It returns `false` when the device is not connected, the session was already requested to end, or the local debounce window is still active.
 
 ## mTLS Setup (`keys.h`)
 
@@ -449,12 +476,14 @@ pio run -e esp32dev
 | `on(USAGES, callback)`        | Register typed callback for ur + le + nl                         | `void`       | `Usages &`                        |
 | `on(DEVICE_STATUS, callback)` | Register typed callback for ds                                   | `void`       | `DeviceStates &`                  |
 | `on(INIT, callback)`          | Register typed callback for init                                 | `void`       | `Inits &`                         |
+| `on(ACTIVE_SESSION, callback)`| Register active session callback                                 | `void`       | `ActiveSession &`                 |
 | `on(ENTITIES, callback)`      | Register typed callback for entity commands                      | `void`       | `EntityCommand &`                 |
 | `onEntity(key, callback)`     | Register callback for a specific entity key (string or object)   | `void`       | `EntityCommand &`                 |
 | `pushEntity(key, value)`      | Send a single entity state update                                | `bool`       | `true` = sent, `false` = fail     |
 | `pushEntity(entity, value)`   | Send entity state using Entity object as key                     | `bool`       | `true` = sent, `false` = fail     |
 | `updateEntities(json)`        | Send multiple entity states as JSON array                        | `bool`       | `true` = sent, `false` = fail     |
 | `pushBatchEntities()`         | Start batch state builder (chain `.add().send()`)                | `BatchState` | Builder object                    |
+| `entity(key)`                 | Read latest local entity value cached by the library             | `EntityValue`| `toString/toFloat/toInt/isOn`     |
 | `requestInit()`               | Request initial configuration                                    | `bool`       | `true` = sent, `false` = fail     |
 
 ### Verifications Object
@@ -520,6 +549,7 @@ pio run -e esp32dev
 | `isValid()`                | Check if payload was parsed successfully | `bool`      | `true`, `false`                                                                                                 |
 | `entities()`               | Raw JSON array of GPIO entities          | `String`    | e.g. `[{"p":1,"v":"0"}]`                                                                                        |
 | `merchantStatus()`         | Current merchant status                  | `String`    | `"idle"`, `"pending_payment"`, `"expired_payment"`, `"success_payment"`, `"maintenance"`, `"on_active_service"` |
+| `activeOrderId()`          | Active paid order code from init         | `String`    | e.g. `"ODR-260601-12345678"`                                                                                    |
 | `verificationFlag()`       | Verification mode flag                   | `int`       | `0`, `1`, `2`, `3`                                                                                              |
 | `isIdle()`                 | Merchant status is idle                  | `bool`      | `true`, `false`                                                                                                 |
 | `isPendingPayment()`       | Merchant status is pending payment       | `bool`      | `true`, `false`                                                                                                 |
@@ -552,11 +582,29 @@ pio run -e esp32dev
 
 ### Macros
 
-| Macro                               | Description                                | Example                                                    |
-| ----------------------------------- | ------------------------------------------ | ---------------------------------------------------------- |
-| `ON_ENTITY(entityObject, callback)` | Register custom callback for entity object | `ON_ENTITY(relay1, [](EntityCommand &cmd){ ... });`        |
-| `ON_ENTITY_S(key, callback)`        | Register custom callback by string key     | `ON_ENTITY_S("led_1", [](EntityCommand &cmd){ ... });`     |
-| `fngin.onEntity(key, callback)`     | Register callback by string key (manual)   | `fngin.onEntity("status", [](EntityCommand &cmd){ ... });` |
+| Macro | Kind | Payload | Style | Example |
+| --- | --- | --- | --- | --- |
+| `ON_ENTITY(entityObject, callback)` | Entity callback | `EntityCommand &` | Inline lambda | `ON_ENTITY(relay1, [](EntityCommand &cmd){ ... });` |
+| `ON_ENTITY_S(key, callback)` | Entity callback | `EntityCommand &` | Inline lambda | `ON_ENTITY_S("led_1", [](EntityCommand &cmd){ ... });` |
+| `fngin.onEntity(key, callback)` | Entity callback | `EntityCommand &` | Runtime registration | `fngin.onEntity("status", [](EntityCommand &cmd){ ... });` |
+| `ON_ENTITIES(cmd)` | Global entity callback | `EntityCommand &` | Macro body | `ON_ENTITIES(cmd) { ... }` |
+| `ON_VERIFICATIONS(v)` | Verification flow | `Verifications &` | Macro body | `ON_VERIFICATIONS(v) { ... }` |
+| `ON_PAYMENTS(p)` | Payment flow | `Payments &` | Macro body | `ON_PAYMENTS(p) { ... }` |
+| `ON_USAGES(u)` | Usage flow | `Usages &` | Macro body | `ON_USAGES(u) { ... }` |
+| `ON_DEVICE_STATUS(ds)` | Device status flow | `DeviceStates &` | Macro body | `ON_DEVICE_STATUS(ds) { ... }` |
+| `ON_INIT(i)` | Init flow | `Inits &` | Macro body | `ON_INIT(i) { ... }` |
+| `ON_OTA_STATUS(status, message)` | OTA status | `const char *, const char *` | Macro body | `ON_OTA_STATUS(status, message) { ... }` |
+| `ON_ACTIVE_SESSION(s)` | Active session | `ActiveSession &` | Macro body | `ON_ACTIVE_SESSION(s) { ... }` |
+
+For runtime registration, active session uses:
+
+```cpp
+fngin.on(ON_ACTIVE_SESSION, [](ActiveSession &s) {
+    if (s.canRun()) {
+        s.endSession();
+    }
+});
+```
 
 ## License
 
