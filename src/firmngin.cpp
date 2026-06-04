@@ -27,6 +27,7 @@ Firmngin::Firmngin(const char *deviceId, const char *deviceKey)
       _debug(false),
       _lastMQTTAttempt(0),
       _mqttClient(_wifiClient),
+      _userMqttClient(_userMqttTransport),
       _mqttServer(MQTT_SERVER_ADDR),
       _mqttPort(MQTT_SERVER_PORT),
       _e2eeEnabled(false)
@@ -43,6 +44,7 @@ Firmngin::Firmngin(const char *deviceId, const char *deviceKey, const char *clie
       _debug(false),
       _lastMQTTAttempt(0),
       _mqttClient(_wifiClient),
+      _userMqttClient(_userMqttTransport),
       _mqttServer(MQTT_SERVER_ADDR),
       _mqttPort(MQTT_SERVER_PORT),
       _e2eeEnabled(false),
@@ -62,6 +64,7 @@ Firmngin::Firmngin(const char *deviceId, const char *deviceKey)
       _debug(false),
       _lastMQTTAttempt(0),
       _mqttClient(_wifiClient),
+      _userMqttClient(_userMqttTransport),
       _mqttServer(MQTT_SERVER_ADDR),
       _mqttPort(MQTT_SERVER_PORT),
       _e2eeEnabled(false)
@@ -78,6 +81,7 @@ Firmngin::Firmngin(const char *deviceId, const char *deviceKey, const char *caCe
       _debug(false),
       _lastMQTTAttempt(0),
       _mqttClient(_wifiClient),
+      _userMqttClient(_userMqttTransport),
       _mqttServer(MQTT_SERVER_ADDR),
       _mqttPort(MQTT_SERVER_PORT),
       _e2eeEnabled(false),
@@ -98,6 +102,7 @@ Firmngin::Firmngin(const char *deviceId, const char *deviceKey, const uint8_t *f
       _debug(false),
       _lastMQTTAttempt(0),
       _mqttClient(_wifiClient),
+      _userMqttClient(_userMqttTransport),
       _mqttServer(MQTT_SERVER_ADDR),
       _mqttPort(MQTT_SERVER_PORT),
       _e2eeEnabled(false),
@@ -118,6 +123,7 @@ Firmngin::Firmngin(const char *deviceId, const char *deviceKey)
       _debug(false),
       _lastMQTTAttempt(0),
       _mqttClient(_wifiClient),
+      _userMqttClient(_userMqttTransport),
       _mqttServer(MQTT_SERVER_ADDR),
       _mqttPort(MQTT_SERVER_PORT),
       _e2eeEnabled(false)
@@ -128,6 +134,67 @@ Firmngin::Firmngin(const char *deviceId, const char *deviceKey)
     }
 }
 #endif
+
+PubSubClient &Firmngin::mqttClient()
+{
+    return _userMqttClient;
+}
+
+Client &Firmngin::mqttTransport()
+{
+    return _userMqttTransport;
+}
+
+void Firmngin::mqttClientPrepare()
+{
+    if (_userMqttPrepared)
+        return;
+
+    uint16_t size = _userMqttBufferSize;
+    if (size < 128)
+        size = 128;
+    _userMqttClient.setBufferSize(size);
+    _userMqttClient.setKeepAlive(30);
+    _userMqttClient.setSocketTimeout(10);
+
+#if defined(ESP8266) || defined(ESP32)
+    if (_userMqttInsecure)
+        _userMqttTransport.setInsecure();
+#endif
+
+    _userMqttPrepared = true;
+}
+
+void Firmngin::mqttClientSetBufferSize(uint16_t size)
+{
+    if (_userMqttPrepared)
+        return;
+    if (size < 128)
+        size = 128;
+    _userMqttBufferSize = size;
+}
+
+void Firmngin::mqttClientSetInsecure(bool insecure)
+{
+    _userMqttInsecure = insecure;
+#if defined(ESP8266) || defined(ESP32)
+    if (insecure)
+        _userMqttTransport.setInsecure();
+#endif
+}
+
+void Firmngin::mqttClientLoop()
+{
+    if (_userMqttPrepared && _userMqttClient.connected())
+        _userMqttClient.loop();
+}
+
+void Firmngin::mqttClientDisconnect()
+{
+    if (_userMqttClient.connected())
+        _userMqttClient.disconnect();
+    _userMqttTransport.stop();
+}
 
 Firmngin::~Firmngin()
 {

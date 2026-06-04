@@ -4,7 +4,7 @@
   <img src="https://github.com/firmngin/Firmngin-Arduino/blob/main/logo.png?raw=true" alt="Firmngin" width="96">
 </p>
 
-IoT Library for the Firmngin Platform. Enables ESP8266/ESP32 devices to accept payments, receive commands, and communicate securely with mTLS support.
+IoT library for the Firmngin platform. Enables ESP8266/ESP32 devices to accept payments, receive commands, and communicate securely with mTLS support. **Built on top of [PubSubClient](https://github.com/knolleary/pubsubclient)** for MQTT; a vendored copy is included under `src/PubSubClient/`.
 
 Check out [firmngin.dev](https://firmngin.dev) for more information.
 
@@ -23,18 +23,17 @@ Add to your `platformio.ini`:
 
 ```ini
 lib_deps =
-    knolleary/PubSubClient @ ^2.8.0
+    firmngin/firmngin  ; or symlink to this repo
 ```
 
-> We use these excellent 3rd party libraries to power Firmngin Arduino Library. Make sure they are installed in your project.
+> MQTT is provided by **PubSubClient** (bundled in `src/PubSubClient/`). You may also depend on upstream `knolleary/PubSubClient` if not using the vendored copy.
 
-Copy `src/firmngin.h` and `src/firmngin.cpp` to your project.
+For a minimal MQTT-only sketch without Firmngin credentials, see `examples/MqttOnlyExample` and `examples/README.md`.
 
 ### Arduino IDE
 
-1. Install dependencies via Library Manager:
-   - **PubSubClient** by Nick O'Leary
-2. Install the library, then add your optional `keys.h` file next to your sketch if you use mTLS.
+1. Install this library (PubSubClient is declared in `library.properties` `depends=` and vendored under `src/PubSubClient/`).
+2. Add your optional `keys.h` next to your sketch if you use mTLS.
 
 ## Quick Start
 

@@ -52,6 +52,12 @@
 #define FIRMNGIN_QUEUE_MAX_CAPACITY 128
 #define FIRMNGIN_QUEUE_DRAIN_INTERVAL_MS 5000UL
 
+// User-managed MQTT stack (separate broker). Exposes vendored PubSubClient via mqttClient().
+// Platform MQTT (_mqttClient) also uses PubSubClient — Firmngin is built on that dependency.
+#ifndef FIRMNGIN_MQTT_CLIENT_DEFAULT_BUFFER_SIZE
+#define FIRMNGIN_MQTT_CLIENT_DEFAULT_BUFFER_SIZE 512
+#endif
+
 // Default MQTT Server Configuration
 #define DEFAULT_MQTT_SERVER "asia-jkt1.firmngin.dev"
 #define DEFAULT_MQTT_PORT 8883
@@ -657,6 +663,14 @@ public:
     void setInsecure(bool insecure = true);
     bool isPlatformSupported();
 
+    PubSubClient &mqttClient();
+    Client &mqttTransport();
+    void mqttClientPrepare();
+    void mqttClientSetBufferSize(uint16_t size);
+    void mqttClientSetInsecure(bool insecure = true);
+    void mqttClientLoop();
+    void mqttClientDisconnect();
+
     // Persistent offline publish queue (LITTLEFS-backed)
     void setQueueEnabled(bool enabled = true);
     void setMaxQueueEntries(uint16_t maxEntries);
@@ -714,6 +728,17 @@ private:
     WiFiClient _wifiClient;
 #endif
     PubSubClient _mqttClient;
+
+#if defined(ESP8266) || defined(ESP32)
+    WiFiClientSecure _userMqttTransport;
+#else
+    WiFiClient _userMqttTransport;
+#endif
+    PubSubClient _userMqttClient;
+    uint16_t _userMqttBufferSize = FIRMNGIN_MQTT_CLIENT_DEFAULT_BUFFER_SIZE;
+    bool _userMqttInsecure = true;
+    bool _userMqttPrepared = false;
+
     unsigned long _delayRetryMQTT = 5000;
     int maxRetryMQTT = 3;
     int defaultQos = 1;
