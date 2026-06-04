@@ -34,7 +34,7 @@ if [ -z "$VERSION" ]; then
 fi
 
 LIBRARY_NAME="firmngin"
-RELEASE_DIR="$RELEASE_OUTPUT_DIR/${LIBRARY_NAME}-${VERSION}"
+RELEASE_DIR="$RELEASE_OUTPUT_DIR/${LIBRARY_NAME}"
 
 echo "Creating release for ${LIBRARY_NAME} version ${VERSION}"
 
@@ -106,11 +106,23 @@ done
 # Create ZIP
 ZIP_FILE="$RELEASE_OUTPUT_DIR/${LIBRARY_NAME}-${VERSION}.zip"
 rm -f "$ZIP_FILE"
-(cd "$RELEASE_OUTPUT_DIR" && zip -r "${LIBRARY_NAME}-${VERSION}.zip" "${LIBRARY_NAME}-${VERSION}")
+(cd "$RELEASE_OUTPUT_DIR" && zip -r "${LIBRARY_NAME}-${VERSION}.zip" "${LIBRARY_NAME}")
 
 echo "Release package created: $ZIP_FILE"
 
-# Cleanup
+# install_arduino_lib — extract to Arduino libraries so Arduino IDE picks it up
+# Set ARDUINO_LIBRARIES_DIR env to override default ($HOME/Documents/Arduino/libraries)
+ARDUINO_DIR="${ARDUINO_LIBRARIES_DIR:-$HOME/Documents/Arduino/libraries}"
+INSTALL_DIR="$ARDUINO_DIR/$LIBRARY_NAME"
+
+if [ -d "$INSTALL_DIR" ]; then
+    echo "Removing existing library at $INSTALL_DIR"
+    rm -rf "$INSTALL_DIR"
+fi
+
+echo "Installing to $INSTALL_DIR"
+unzip -q "$ZIP_FILE" -d "$ARDUINO_DIR"
+
 rm -rf "$RELEASE_DIR"
 
-echo "Done!"
+echo "Done! Library installed at $INSTALL_DIR"

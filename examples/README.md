@@ -16,6 +16,18 @@ This folder contains examples for using the Firmngin library.
 - Simple MQTT message handling
 - Good starting point for beginners
 
+### OTAUpdateExample
+- OTA firmware update with checkOTA() and performOTA()
+- Async download with progress tracking via onOTAStatus() callback
+- Manual trigger via hardware button or backend entity command
+- Periodic auto-check for updates
+
+### ActiveSessionEndExample
+- Simple `ON_ACTIVE_SESSION` usage
+- Also available as `fngin.on(ON_ACTIVE_SESSION, [](ActiveSession &s){ ... });`
+- Ends current session with `s.endSession()`
+- Uses device-side entity logic
+
 ### AdvancedExample (Coming Soon)
 - Advanced JSON parsing
 - Complex device logic

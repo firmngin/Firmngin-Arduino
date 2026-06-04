@@ -20,6 +20,7 @@
 #include <ESP8266HTTPClient.h>
 #include <WiFiClientSecure.h>
 #include <bearssl/bearssl_hash.h>
+#include <LittleFS.h>
 #define PLATFORM_SUPPORTED true
 #define PLATFORM_NAME "ESP8266"
 #define FIRMWARE_BUFFER_SIZE 4096
@@ -28,6 +29,7 @@
 #include <HTTPClient.h>
 #include <WiFiClientSecure.h>
 #include <mbedtls/md.h>
+#include <LittleFS.h>
 #define PLATFORM_SUPPORTED true
 #define PLATFORM_NAME "ESP32"
 #define FIRMWARE_BUFFER_SIZE 8192
@@ -36,6 +38,19 @@
 #define PLATFORM_NAME "UNKNOWN"
 #define FIRMWARE_BUFFER_SIZE 2048
 #endif
+
+// Persistent queue (LITTLEFS-backed circular buffer for offline publish retry)
+#define FIRMNGIN_QUEUE_FILE_NAME "/firmngin_q.dat"
+#define FIRMNGIN_QUEUE_MAGIC 0x464E5151U
+#define FIRMNGIN_QUEUE_VERSION 1
+#define FIRMNGIN_QUEUE_HEADER_SIZE 16
+#define FIRMNGIN_QUEUE_RECORD_SIZE 256
+#define FIRMNGIN_QUEUE_TOPIC_MAX 96
+#define FIRMNGIN_QUEUE_PAYLOAD_MAX 140
+#define FIRMNGIN_QUEUE_DEFAULT_CAPACITY 32
+#define FIRMNGIN_QUEUE_MIN_CAPACITY 4
+#define FIRMNGIN_QUEUE_MAX_CAPACITY 128
+#define FIRMNGIN_QUEUE_DRAIN_INTERVAL_MS 5000UL
 
 // Default MQTT Server Configuration
 #define DEFAULT_MQTT_SERVER "asia-jkt1.firmngin.dev"
@@ -101,7 +116,9 @@ enum DeviceStateType
     VERIFICATIONS,
     PAYMENTS,
     USAGES,
-    ENTITIES
+    ENTITIES,
+    ACTIVE_SESSION,
+    ON_ACTIVE_SESSION = ACTIVE_SESSION
 };
 
 enum OTAAsyncState
@@ -127,10 +144,11 @@ static const char *STATE_NAMES[] = {
     "ur",   // USAGE_RESPONSE
     "le",   // LIMIT_EXCEEDED
     "nl",   // NEAR_LIMIT
-    "vr",   // VERIFICATIONS
+    "verif",// VERIFICATIONS
     "pay",  // PAYMENTS
     "usg",  // USAGES
     "rs",   // ENTITIES
+    "active_session", // ACTIVE_SESSION
 };
 
 // Minimal DeviceState class - returns raw payload only
@@ -268,17 +286,19 @@ class Inits
 private:
     String _entitiesJson;
     String _merchantStatus;
+    String _activeOrderId;
     int _verificationFlag;
     bool _valid;
     String _rawPayload;
 
 public:
-    Inits() : _entitiesJson(""), _merchantStatus(""), _verificationFlag(0), _valid(false) {}
+    Inits() : _entitiesJson(""), _merchantStatus(""), _activeOrderId(""), _verificationFlag(0), _valid(false) {}
     Inits(const String &jsonPayload);
 
     bool isValid() const { return _valid; }
     String entities() const { return _entitiesJson; }
     String merchantStatus() const { return _merchantStatus; }
+    String activeOrderId() const { return _activeOrderId; }
     int verificationFlag() const { return _verificationFlag; }
     String metadata() const { return _rawPayload; }
 
@@ -313,6 +333,9 @@ public:
     String metadata() const { return _rawPayload; }
 };
 
+class Firmngin;
+class ActiveSession;
+
 typedef std::function<void(DeviceState)> StateCallbackFunction;
 typedef std::function<void(Verifications &)> VerificationCallbackFunction;
 typedef std::function<void(Payments &)> PaymentCallbackFunction;
@@ -320,9 +343,26 @@ typedef std::function<void(Usages &)> UsageCallbackFunction;
 typedef std::function<void(DeviceStates &)> DeviceStateCallbackFunction;
 typedef std::function<void(Inits &)> InitCallbackFunction;
 typedef std::function<void(EntityCommand &)> EntityCommandCallbackFunction;
+typedef std::function<void(ActiveSession &)> ActiveSessionCallbackFunction;
 typedef std::function<void(const char *status, const char *message)> OTACallbackFunction;
 
-class Firmngin;
+typedef std::pair<String, StateCallbackFunction> StateRegEntry;
+typedef std::pair<String, EntityCommandCallbackFunction> EntityRegEntry;
+
+class EntityValue
+{
+private:
+    String _value;
+
+public:
+    EntityValue() : _value("") {}
+    EntityValue(const String &value) : _value(value) {}
+
+    String toString() const { return _value; }
+    float toFloat() const { return _value.toFloat(); }
+    int toInt() const { return _value.toInt(); }
+    bool isOn() const { return _value == "1" || _value == "true" || _value == "on"; }
+};
 
 // Entity: Simple key wrapper for entity references
 class Entity
@@ -340,11 +380,84 @@ public:
     String key() { return _key; }
 };
 
+class ActiveSession
+{
+private:
+    Firmngin *_instance;
+    String _orderId;
+    bool _active;
+    bool _canRun;
+
+public:
+    ActiveSession(Firmngin *instance, const String &orderId, bool active, bool canRun)
+        : _instance(instance), _orderId(orderId), _active(active), _canRun(canRun) {}
+
+    bool isActive() const { return _active; }
+    bool canRun() const { return _canRun; }
+    String orderId() const { return _orderId; }
+    EntityValue entity(const char *key) const;
+    EntityValue entity(Entity &entity) const;
+    bool endSession();
+};
+
 // Forward declaration for deferred registration
-typedef std::pair<String, EntityCommandCallbackFunction> EntityRegEntry;
+inline std::vector<StateRegEntry> &deferredStateRegistrations()
+{
+    static std::vector<StateRegEntry> registrations;
+    return registrations;
+}
+
 inline std::vector<EntityRegEntry> &deferredEntityRegistrations()
 {
     static std::vector<EntityRegEntry> registrations;
+    return registrations;
+}
+
+inline std::vector<EntityCommandCallbackFunction> &deferredEntitiesRegistrations()
+{
+    static std::vector<EntityCommandCallbackFunction> registrations;
+    return registrations;
+}
+
+inline std::vector<VerificationCallbackFunction> &deferredVerificationRegistrations()
+{
+    static std::vector<VerificationCallbackFunction> registrations;
+    return registrations;
+}
+
+inline std::vector<PaymentCallbackFunction> &deferredPaymentRegistrations()
+{
+    static std::vector<PaymentCallbackFunction> registrations;
+    return registrations;
+}
+
+inline std::vector<UsageCallbackFunction> &deferredUsageRegistrations()
+{
+    static std::vector<UsageCallbackFunction> registrations;
+    return registrations;
+}
+
+inline std::vector<DeviceStateCallbackFunction> &deferredDeviceStatusRegistrations()
+{
+    static std::vector<DeviceStateCallbackFunction> registrations;
+    return registrations;
+}
+
+inline std::vector<InitCallbackFunction> &deferredInitRegistrations()
+{
+    static std::vector<InitCallbackFunction> registrations;
+    return registrations;
+}
+
+inline std::vector<ActiveSessionCallbackFunction> &deferredActiveSessionRegistrations()
+{
+    static std::vector<ActiveSessionCallbackFunction> registrations;
+    return registrations;
+}
+
+inline std::vector<OTACallbackFunction> &deferredOTAStatusRegistrations()
+{
+    static std::vector<OTACallbackFunction> registrations;
     return registrations;
 }
 
@@ -354,6 +467,25 @@ inline std::vector<EntityRegEntry> &deferredEntityRegistrations()
 #define FNGIN_CONCAT_IMPL(a, b) a##b
 #define FNGIN_CONCAT(a, b) FNGIN_CONCAT_IMPL(a, b)
 
+#define FNGIN_ON_STATE(stateName, statePath, stateVar) \
+    static void FNGIN_CONCAT(_fngin_state_handler_, __LINE__)(DeviceState stateVar); \
+    static const bool FNGIN_CONCAT(_fngin_state_reg_, __LINE__) = ([]() { \
+        deferredStateRegistrations().emplace_back(statePath, FNGIN_CONCAT(_fngin_state_handler_, __LINE__)); \
+        return true; })(); \
+    static void FNGIN_CONCAT(_fngin_state_handler_, __LINE__)(DeviceState stateVar)
+
+#define ON_PAYMENT(stateVar) FNGIN_ON_STATE(PAYMENT, "pm", stateVar)
+#define ON_PENDING_PAYMENT(stateVar) FNGIN_ON_STATE(PENDING_PAYMENT, "pp", stateVar)
+#define ON_METADATA_ON_PENDING(stateVar) FNGIN_ON_STATE(METADATA_ON_PENDING, "mop", stateVar)
+#define ON_METADATA_ON_EXPIRED(stateVar) FNGIN_ON_STATE(METADATA_ON_EXPIRED, "moe", stateVar)
+#define ON_METADATA_ON_SUCCESS(stateVar) FNGIN_ON_STATE(METADATA_ON_SUCCESS, "mos", stateVar)
+#define ON_DISPLAY_PIN(stateVar) FNGIN_ON_STATE(DISPLAY_PIN, "dpin", stateVar)
+#define ON_VERIFICATION_RESULT(stateVar) FNGIN_ON_STATE(VERIFICATION_RESULT, "vr", stateVar)
+#define ON_USAGE_RESPONSE(stateVar) FNGIN_ON_STATE(USAGE_RESPONSE, "ur", stateVar)
+#define ON_LIMIT_EXCEEDED(stateVar) FNGIN_ON_STATE(LIMIT_EXCEEDED, "le", stateVar)
+#define ON_NEAR_LIMIT(stateVar) FNGIN_ON_STATE(NEAR_LIMIT, "nl", stateVar)
+#define ON_DEVICE_STATUS_RAW(stateVar) FNGIN_ON_STATE(DEVICE_STATUS, "ds", stateVar)
+#define ON_INIT_RAW(stateVar) FNGIN_ON_STATE(INIT, "init", stateVar)
 #define ON_ENTITY(entity, handler) \
     static const bool FNGIN_CONCAT(_fngin_entity_reg_, __LINE__) = ([]() {  \
         deferredEntityRegistrations().emplace_back(entity.key(), handler);   \
@@ -363,6 +495,62 @@ inline std::vector<EntityRegEntry> &deferredEntityRegistrations()
     static const bool FNGIN_CONCAT(_fngin_entity_reg_, __LINE__) = ([]() {  \
         deferredEntityRegistrations().emplace_back(key, handler);            \
         return true; })();
+
+#define ON_ENTITIES(entityCommandVar) \
+    static void FNGIN_CONCAT(_fngin_entities_handler_, __LINE__)(EntityCommand &entityCommandVar); \
+    static const bool FNGIN_CONCAT(_fngin_entities_reg_, __LINE__) = ([]() { \
+        deferredEntitiesRegistrations().push_back(FNGIN_CONCAT(_fngin_entities_handler_, __LINE__)); \
+        return true; })(); \
+    static void FNGIN_CONCAT(_fngin_entities_handler_, __LINE__)(EntityCommand &entityCommandVar)
+
+#define ON_VERIFICATIONS(verificationVar) \
+    static void FNGIN_CONCAT(_fngin_verification_handler_, __LINE__)(Verifications &verificationVar); \
+    static const bool FNGIN_CONCAT(_fngin_verification_reg_, __LINE__) = ([]() { \
+        deferredVerificationRegistrations().push_back(FNGIN_CONCAT(_fngin_verification_handler_, __LINE__)); \
+        return true; })(); \
+    static void FNGIN_CONCAT(_fngin_verification_handler_, __LINE__)(Verifications &verificationVar)
+
+#define ON_PAYMENTS(paymentVar) \
+    static void FNGIN_CONCAT(_fngin_payment_handler_, __LINE__)(Payments &paymentVar); \
+    static const bool FNGIN_CONCAT(_fngin_payment_reg_, __LINE__) = ([]() { \
+        deferredPaymentRegistrations().push_back(FNGIN_CONCAT(_fngin_payment_handler_, __LINE__)); \
+        return true; })(); \
+    static void FNGIN_CONCAT(_fngin_payment_handler_, __LINE__)(Payments &paymentVar)
+
+#define ON_USAGES(usageVar) \
+    static void FNGIN_CONCAT(_fngin_usage_handler_, __LINE__)(Usages &usageVar); \
+    static const bool FNGIN_CONCAT(_fngin_usage_reg_, __LINE__) = ([]() { \
+        deferredUsageRegistrations().push_back(FNGIN_CONCAT(_fngin_usage_handler_, __LINE__)); \
+        return true; })(); \
+    static void FNGIN_CONCAT(_fngin_usage_handler_, __LINE__)(Usages &usageVar)
+
+#define ON_DEVICE_STATUS(deviceStatusVar) \
+    static void FNGIN_CONCAT(_fngin_device_status_handler_, __LINE__)(DeviceStates &deviceStatusVar); \
+    static const bool FNGIN_CONCAT(_fngin_device_status_reg_, __LINE__) = ([]() { \
+        deferredDeviceStatusRegistrations().push_back(FNGIN_CONCAT(_fngin_device_status_handler_, __LINE__)); \
+        return true; })(); \
+    static void FNGIN_CONCAT(_fngin_device_status_handler_, __LINE__)(DeviceStates &deviceStatusVar)
+
+#define ON_INIT(initVar) \
+    static void FNGIN_CONCAT(_fngin_init_handler_, __LINE__)(Inits &initVar); \
+    static const bool FNGIN_CONCAT(_fngin_init_reg_, __LINE__) = ([]() { \
+        deferredInitRegistrations().push_back(FNGIN_CONCAT(_fngin_init_handler_, __LINE__)); \
+        return true; })(); \
+    static void FNGIN_CONCAT(_fngin_init_handler_, __LINE__)(Inits &initVar)
+
+#define ON_ACTIVE_SESSION(sessionVar) \
+    static void FNGIN_CONCAT(_fngin_active_session_handler_, __LINE__)(ActiveSession &sessionVar); \
+    static const bool FNGIN_CONCAT(_fngin_active_session_reg_, __LINE__) = ([]() { \
+        deferredActiveSessionRegistrations().push_back(FNGIN_CONCAT(_fngin_active_session_handler_, __LINE__)); \
+        return true; })(); \
+    static void FNGIN_CONCAT(_fngin_active_session_handler_, __LINE__)(ActiveSession &sessionVar)
+
+#define ON_OTA_STATUS(statusVar, messageVar) \
+    static void FNGIN_CONCAT(_fngin_ota_status_handler_, __LINE__)(const char *statusVar, const char *messageVar); \
+    static const bool FNGIN_CONCAT(_fngin_ota_status_reg_, __LINE__) = ([]() { \
+        deferredOTAStatusRegistrations().push_back(FNGIN_CONCAT(_fngin_ota_status_handler_, __LINE__)); \
+        return true; })(); \
+    static void FNGIN_CONCAT(_fngin_ota_status_handler_, __LINE__)(const char *statusVar, const char *messageVar)
 
 // BatchState: Builder pattern for batch entity updates
 #define FIRMNGIN_BATCH_BUFFER_SIZE 1024
@@ -469,6 +657,12 @@ public:
     void setInsecure(bool insecure = true);
     bool isPlatformSupported();
 
+    // Persistent offline publish queue (LITTLEFS-backed)
+    void setQueueEnabled(bool enabled = true);
+    void setMaxQueueEntries(uint16_t maxEntries);
+    uint16_t getQueueSize() const;
+    void clearQueue();
+
     void on(const char *state, StateCallbackFunction callback);
     void on(DeviceStateType state, StateCallbackFunction callback);
     void on(DeviceStateType state, VerificationCallbackFunction callback);
@@ -477,11 +671,15 @@ public:
     void on(DeviceStateType state, DeviceStateCallbackFunction callback);
     void on(DeviceStateType state, InitCallbackFunction callback);
     void on(DeviceStateType state, EntityCommandCallbackFunction callback);
+    void on(DeviceStateType state, ActiveSessionCallbackFunction callback);
     void onEntity(const char *key, EntityCommandCallbackFunction callback);
 
     bool pushEntity(const char *key, const char *value);
     bool pushEntity(Entity &entity, const char *value);
     bool updateEntities(const char *jsonPayload);
+    EntityValue entity(const char *key);
+    EntityValue entity(Entity &entity);
+    bool endSession();
     bool requestInit();
     BatchState pushBatchEntities();
     void setFirmwareInfo(const char *version, const char *targetBoard, const char *targetModel);
@@ -496,6 +694,13 @@ public:
     bool checkOTA();
     bool performOTA(const char *manifestUrl = nullptr);
     void onOTAStatus(OTACallbackFunction callback);
+
+    // Camera image upload
+    typedef void (*UploadCallbackFunction)(const char *response);
+    typedef void (*UploadErrorCallbackFunction)(int code, const char *message);
+    bool uploadImage(const char *entityKey, uint8_t *data, size_t len, const char *contentType,
+                     UploadCallbackFunction onSuccess = nullptr,
+                     UploadErrorCallbackFunction onError = nullptr);
 
 private:
     const char *_deviceId;
@@ -522,6 +727,20 @@ private:
     String _firmwareVersion = FIRMNGIN_FIRMWARE_VERSION;
     String _firmwareTargetBoard = FIRMNGIN_FIRMWARE_TARGET_BOARD;
     String _firmwareTargetModel = FIRMNGIN_FIRMWARE_TARGET_MODEL;
+    String _lastSyncedFirmwareVersion;
+    String _topicUpdateEntity;
+    String _topicUpdateEntities;
+    unsigned long _ntpSyncStartMs = 0;
+    bool _ntpSynced = false;
+
+    // Persistent offline publish queue state (LITTLEFS circular buffer)
+    bool _queueEnabled = false;
+    uint16_t _queueCapacity = FIRMNGIN_QUEUE_DEFAULT_CAPACITY;
+    uint16_t _queueHead = 0;
+    uint16_t _queueTail = 0;
+    uint16_t _queueCount = 0;
+    bool _queueFileReady = false;
+    unsigned long _lastQueueDrainMs = 0;
     bool _otaEnabled = true;
     String _otaBaseUrl = FIRMNGIN_OTA_BASE_URL;
     String _otaFirmwareID;
@@ -551,6 +770,8 @@ private:
     const uint8_t *_fingerprint = nullptr;
     BearSSL::X509List *_clientCertList = nullptr;
     BearSSL::PrivateKey *_clientPrivKey = nullptr;
+    BearSSL::X509List *_trustAnchors = nullptr;
+    BearSSL::X509List *_otaTrustAnchors = nullptr;
 #elif defined(ESP32)
     const char *_caCert = nullptr;
     const char *_clientCert = nullptr;
@@ -565,36 +786,68 @@ private:
     DeviceStateCallbackFunction _deviceStateCallback;
     InitCallbackFunction _initCallback;
     EntityCommandCallbackFunction _entityCallback;
+    std::vector<VerificationCallbackFunction> _verificationCallbacks;
+    std::vector<PaymentCallbackFunction> _paymentCallbacks;
+    std::vector<UsageCallbackFunction> _usageCallbacks;
+    std::vector<DeviceStateCallbackFunction> _deviceStateCallbacks;
+    std::vector<InitCallbackFunction> _initCallbacks;
     std::map<String, EntityCommandCallbackFunction> _entityCallbacks;
+    std::vector<EntityCommandCallbackFunction> _entityGlobalCallbacks;
     OTACallbackFunction _otaCallback;
+    std::vector<OTACallbackFunction> _otaCallbacks;
+    std::vector<ActiveSessionCallbackFunction> _activeSessionCallbacks;
+    std::map<String, String> _localEntityValues;
+    String _currentOrderId;
+    String _merchantStatus;
+    bool _sessionEndRequested = false;
+    unsigned long _lastSessionEndAtMs = 0;
+    bool _deferredCallbacksLoaded = false;
+    std::vector<StateRegEntry> _stateCallbacks;
 
     void _Debug(String message, bool newLine = true);
     bool connectServer();
-    void mqttCallback(char *topic, byte *payload, unsigned int length);
+    void mqttCallback(char *path, byte *payload, unsigned int length);
     String getPathPayment(String deviceId);
     String getPathDeviceStatus(String deviceId);
     String getPathPendingPayment(String deviceId);
     String getPathMetadataOnPending(String deviceId);
     String getPathMetadataOnExpired(String deviceId);
     String getPathMetadataOnSuccess(String deviceId);
-    String getTopicInit(String deviceId);
-    String getTopicDisplayPIN(String deviceId);
-    String getTopicVerificationResult(String deviceId);
-    String getTopicUsageResponse(String deviceId);
-    String getTopicLimitExceeded(String deviceId);
-    String getTopicNearLimit(String deviceId);
-    String getTopicUpdateEntity(String deviceId);
-    String getTopicUpdateEntities(String deviceId);
-    String getTopicRequestInit(String deviceId);
-    String getTopicEntityCommand(String deviceId);
+    String getPathInit(String deviceId);
+    String getPathDisplayPIN(String deviceId);
+    String getPathVerificationResult(String deviceId);
+    String getPathUsageResponse(String deviceId);
+    String getPathLimitExceeded(String deviceId);
+    String getPathNearLimit(String deviceId);
+    String getPathUpdateEntity(String deviceId);
+    String getPathUpdateEntities(String deviceId);
+    String getPathRequestInit(String deviceId);
+    String getPathEntityCommand(String deviceId);
+    String getPathSessionEnd(String deviceId);
     String getPathPing(String deviceId);
     String getOTATriggerPath(String deviceId);
     void syncTime();
     void setupLWT();
-    bool publishPayload(const char *topic, const char *payload, bool retained = false);
+    bool publishPayload(const char *path, const char *payload, bool retained = false);
     bool publishOTAStatus(const char *status, const char *message);
+    int normalizeOTAProgress(const char *status, const char *message);
+
+    // Persistent queue helpers
+    bool _initQueue();
+    void _shutdownQueue();
+    bool _enqueueToQueue(const char *topic, const uint8_t *payload, size_t payloadLen, bool retained);
+    bool _peekQueueHead(String &topic, String &payload, bool &retained);
+    void _dropQueueHead();
+    void _drainQueue();
+    bool _readQueueHeader(uint16_t &head, uint16_t &tail, uint16_t &count);
+    bool _writeQueueHeader(uint16_t head, uint16_t tail, uint16_t count);
+    void _resetQueueFile();
     void _processOTA();
     void _otaCleanup();
+    void runActiveSessionHandlers();
+    void setMerchantStatus(const String &status);
+    void setCurrentOrder(const String &orderId);
+    void clearCurrentSession();
 };
 
 #endif // FIRMNGINKIT_H
