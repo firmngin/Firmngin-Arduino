@@ -6,7 +6,7 @@
  *
  * Setup:
  * 1. Generate keys.h from firmngin dashboard or cert-gen API
- * 2. Copy keys.h to this sketch folder
+ * 2. Copy keys.h to this sketch folder and set DEVICE_ID / DEVICE_KEY
  * 3. Choose validation mode in keys.h:
  *    - #define USE_CA_CERT     (recommended for ESP32)
  *    - #define USE_FINGERPRINT (recommended for ESP8266)
@@ -22,9 +22,6 @@
 #elif defined(ESP32)
 #include <WiFi.h>
 #endif
-
-#define DEVICE_ID "YOUR_DEVICE_ID"
-#define DEVICE_KEY "YOUR_DEVICE_SECRET_KEY"
 
 // WiFi credentials
 const char *ssid = "YOUR_SSID";
@@ -246,7 +243,6 @@ void setup()
   pinMode(RELAY2_PIN, OUTPUT);
   pinMode(PWM_PIN, OUTPUT);
 
-  // Connect to WiFi
   WiFi.begin(ssid, password);
   Serial.print("Connecting to WiFi");
   while (WiFi.status() != WL_CONNECTED) {

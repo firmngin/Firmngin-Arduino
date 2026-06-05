@@ -21,9 +21,6 @@
 #include <WiFi.h>
 #endif
 
-#define DEVICE_ID "YOUR_DEVICE_ID"
-#define DEVICE_KEY "YOUR_DEVICE_SECRET_KEY"
-
 #define USER_MQTT_HOST "mqtt.example.com"
 #define USER_MQTT_PORT 8883
 #define USER_MQTT_CLIENT_ID "my-device-user-mqtt"

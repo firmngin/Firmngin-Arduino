@@ -28,6 +28,13 @@
 // Cons: Must update if server certificate changes
 // #define USE_FINGERPRINT
 
+#ifndef DEVICE_ID
+#define DEVICE_ID "YOUR_DEVICE_ID"
+#endif
+#ifndef DEVICE_KEY
+#define DEVICE_KEY "YOUR_DEVICE_SECRET_KEY"
+#endif
+
 // =========================================================================
 // MQTT SERVER CONFIGURATION (Optional)
 // =========================================================================

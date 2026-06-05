@@ -16,9 +16,6 @@
 #include <WiFi.h>
 #endif
 
-#define DEVICE_ID  "YOUR_DEVICE_ID"
-#define DEVICE_KEY "YOUR_DEVICE_SECRET_KEY"
-
 const char *ssid     = "YOUR_SSID";
 const char *password = "YOUR_PASSWORD";
 
