@@ -20,7 +20,7 @@
  * Setup:
  *   1. Copy keys.h from Firmngin dashboard to this sketch folder
  *   2. Update WiFi credentials
- *   3. Update DEVICE_ID and DEVICE_KEY
+ *   3. Set DEVICE_ID and DEVICE_KEY in keys.h
  *   4. Upload and run
  */
 
@@ -30,9 +30,6 @@
 // WiFi credentials
 const char *ssid = "YOUR_SSID";
 const char *password = "YOUR_PASSWORD";
-
-#define DEVICE_ID "YOUR_DEVICE_ID"
-#define DEVICE_KEY "YOUR_DEVICE_SECRET_KEY"
 
 Firmngin fngin(DEVICE_ID, DEVICE_KEY);
 

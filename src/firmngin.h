@@ -70,6 +70,20 @@
 #define KEYS_H_AVAILABLE 0
 #endif
 
+#if !KEYS_H_AVAILABLE
+#warning "keys.h not found — copy keys.h.template to your sketch folder and set DEVICE_ID / DEVICE_KEY"
+#endif
+
+#ifndef DEVICE_ID
+#warning "DEVICE_ID not defined in keys.h"
+#define DEVICE_ID "YOUR_DEVICE_ID"
+#endif
+
+#ifndef DEVICE_KEY
+#warning "DEVICE_KEY not defined in keys.h"
+#define DEVICE_KEY "YOUR_DEVICE_SECRET_KEY"
+#endif
+
 #ifndef FIRMNGIN_SERVER_ADDR
 #define FIRMNGIN_SERVER_ADDR DEFAULT_MQTT_SERVER
 #endif

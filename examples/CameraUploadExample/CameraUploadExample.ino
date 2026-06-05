@@ -27,7 +27,7 @@
  * Setup:
  *   1. Copy keys.h from Firmngin dashboard to this sketch folder
  *   2. Update WiFi credentials below
- *   3. Update DEVICE_ID and DEVICE_KEY
+ *   3. Set DEVICE_ID and DEVICE_KEY in keys.h
  *   4. Upload sketch (connect GPIO 0 to GND)
  *   5. Disconnect GPIO 0 and press RESET
  *   6. Open Serial Monitor at 115200 baud
@@ -51,9 +51,6 @@
 #endif
 
 // ==================== CONFIGURATION ====================
-
-#define DEVICE_ID "YOUR_DEVICE_ID"
-#define DEVICE_KEY "YOUR_DEVICE_SECRET_KEY"
 
 // WiFi credentials
 const char *ssid = "YOUR_SSID";

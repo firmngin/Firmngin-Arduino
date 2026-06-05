@@ -20,6 +20,18 @@ int DAYLIGHT_OFFSET_SEC = 0;
 const char *MQTT_SERVER_ADDR = FIRMNGIN_SERVER_ADDR;
 const int MQTT_SERVER_PORT = FIRMNGIN_SERVER_PORT;
 
+static void warnDeviceCredentials(const char *deviceId, const char *deviceKey)
+{
+    if (deviceId == nullptr || deviceId[0] == '\0' || strcmp(deviceId, "YOUR_DEVICE_ID") == 0)
+    {
+        Serial.println("WARNING: DEVICE_ID not configured in keys.h");
+    }
+    if (deviceKey == nullptr || deviceKey[0] == '\0' || strcmp(deviceKey, "YOUR_DEVICE_SECRET_KEY") == 0)
+    {
+        Serial.println("WARNING: DEVICE_KEY not configured in keys.h");
+    }
+}
+
 #if defined(ESP8266)
 Firmngin::Firmngin(const char *deviceId, const char *deviceKey)
     : _deviceId(deviceId),
@@ -320,6 +332,8 @@ void Firmngin::begin()
 {
     if (!PLATFORM_SUPPORTED)
         return;
+
+    warnDeviceCredentials(_deviceId, _deviceKey);
 
     _topicUpdateEntity = "/d/" + String(_deviceId) + "/ps";
     _topicUpdateEntities = "/d/" + String(_deviceId) + "/psb";

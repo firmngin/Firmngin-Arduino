@@ -5,7 +5,7 @@ This folder contains examples for using the Firmngin library.
 ## Setup
 
 1. **Use the shared library**: Include `<firmngin.h>` from the root `src/` folder; do not copy library files into each example
-2. **Create keys.h**: For mTLS authentication, create a `keys.h` file with your certificates (see template in `src/keys.h.template`)
+2. **Create keys.h**: Copy `src/keys.h.template` to your sketch folder, set `DEVICE_ID` / `DEVICE_KEY`, and add mTLS certificates
 3. **Configure WiFi**: Update WiFi credentials in the example
 4. **Upload and test**: Use PlatformIO or Arduino IDE to compile and upload
 
