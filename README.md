@@ -225,6 +225,14 @@ fngin.pushBatchEntities()
     .add("light", 450)
     .add("status", "active");
 
+// Or use Entity objects as keys
+Entity temp("temperature");
+Entity hum("humidity");
+fngin.pushBatchEntities()
+    .add(temp, 25.5)
+    .add(hum, 80)
+    .add("status", "active");
+
 // Or send raw JSON array directly
 fngin.updateEntities("[{\"key\":\"gpio_1\",\"value\":\"1\"},{\"key\":\"gpio_2\",\"value\":\"0\"}]");
 ```

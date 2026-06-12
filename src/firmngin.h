@@ -707,6 +707,26 @@ public:
         return add(String(key), String(value));
     }
 
+    BatchState &add(const Entity &entity, const char *value)
+    {
+        return add(entity.key(), String(value));
+    }
+
+    BatchState &add(const Entity &entity, int value)
+    {
+        return add(entity.key(), String(value));
+    }
+
+    BatchState &add(const Entity &entity, float value)
+    {
+        return add(entity.key(), String(value));
+    }
+
+    BatchState &add(const Entity &entity, double value)
+    {
+        return add(entity.key(), String(value));
+    }
+
     int count() { return _builder.count(); }
     void clear() { _builder.clear(); }
 };
