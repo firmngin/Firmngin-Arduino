@@ -7,16 +7,12 @@
 
 #include "keys.h" 
 #include <firmngin.h>
-#include <ArduinoJson.h>
 
 #if defined(ESP8266)
 #include <ESP8266WiFi.h>
 #elif defined(ESP32)
 #include <WiFi.h>
 #endif
-
-#define DEVICE_ID "YOUR_DEVICE_ID"
-#define DEVICE_KEY "YOUR_DEVICE_SECRET_KEY"
 
 // WiFi credentials
 const char *ssid = "YOUR_SSID";

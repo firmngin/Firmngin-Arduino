@@ -1,0 +1,98 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version, must match VERSION (example: 0.1.2)"
+        required: true
+        type: string
+      publish_platformio:
+        description: "Publish package to PlatformIO Registry"
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Validate release version
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          if ! printf '%s' "$INPUT_VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "Invalid release version: $INPUT_VERSION"
+            exit 1
+          fi
+
+          VERSION_FILE="$(tr -d '[:space:]' < VERSION)"
+          if [ "$INPUT_VERSION" != "$VERSION_FILE" ]; then
+            echo "Input version ($INPUT_VERSION) must match VERSION ($VERSION_FILE)"
+            exit 1
+          fi
+
+          if git rev-parse "v$INPUT_VERSION" >/dev/null 2>&1; then
+            echo "Tag v$INPUT_VERSION already exists"
+            exit 1
+          fi
+
+      - name: Verify version manifests
+        run: python3 scripts/sync_version.py --check
+
+      - name: Install PlatformIO
+        run: pip install platformio
+
+      - name: Run native unit tests
+        working-directory: test/native
+        run: pio test -e native -v --without-uploading
+
+      - name: Build ESP32 firmware example
+        run: pio run -e esp32dev
+
+      - name: Build ESP8266 firmware example
+        run: pio run -e esp12e
+
+      - name: Create and push tag
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "v$INPUT_VERSION" -m "Release v$INPUT_VERSION"
+          git push origin "v$INPUT_VERSION"
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          gh release create "v$INPUT_VERSION" \
+            --title "v$INPUT_VERSION" \
+            --notes "Release v$INPUT_VERSION"
+
+      - name: Publish to PlatformIO Registry
+        if: ${{ inputs.publish_platformio }}
+        env:
+          PLATFORMIO_AUTH_TOKEN: ${{ secrets.PLATFORMIO_AUTH_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${PLATFORMIO_AUTH_TOKEN:-}" ]; then
+            echo "Missing PLATFORMIO_AUTH_TOKEN secret"
+            exit 1
+          fi
+          pio pkg publish --non-interactive
