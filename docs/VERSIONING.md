@@ -10,7 +10,7 @@ Before release or tagging:
 python3 scripts/sync_version.py
 ```
 
-CI runs `python3 scripts/sync_version.py --check` to ensure `library.properties` and `library.json` match `VERSION`.
+CI runs `python3 scripts/sync_version.py --check` to ensure `library.properties`, `library.json`, and `src/firmngin_version.h` match `VERSION`.
 
 ## Release workflow
 

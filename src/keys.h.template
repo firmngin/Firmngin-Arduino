@@ -56,6 +56,8 @@
 //   --build-property "build.extra_flags=-DFIRMNGIN_FIRMWARE_VERSION=\"1.2.0\""
 //
 // TARGET_BOARD is auto-detected (ESP32/ESP8266), no config needed.
+// API_BASE_URL defaults to api.firmngin.dev; override only for self-hosted:
+//   build_flags = -D FIRMNGIN_API_BASE_URL=\"https://custom.api.com/api/v1\"
 // OTA_BASE_URL defaults to firmngin.dev; override only for self-hosted:
 //   build_flags = -D FIRMNGIN_OTA_BASE_URL=\"https://custom.api.com/api/v1/ota\"
 
