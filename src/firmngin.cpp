@@ -853,10 +853,10 @@ void Firmngin::loop()
         if (now - lastReconnectAttempt > backoffDelay)
         {
             lastReconnectAttempt = now;
-            backoffDelay = min(backoffDelay * 2, 60000);
+            backoffDelay = min(backoffDelay * 2, 60000UL);
             if (connectServer())
             {
-                backoffDelay = 5000;
+                backoffDelay = 5000UL;
                 firstConnect = false;
             }
         }
