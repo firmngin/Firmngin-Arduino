@@ -644,6 +644,12 @@ public:
         _builder.reset();
     }
 
+    ~BatchState()
+    {
+        if (_instance != nullptr)
+            send();
+    }
+
     BatchState &add(String key, String value)
     {
         _builder.add(key.c_str(), value.c_str());
