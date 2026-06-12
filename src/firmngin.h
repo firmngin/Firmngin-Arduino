@@ -647,7 +647,7 @@ public:
     ~BatchState()
     {
         if (_instance != nullptr)
-            send();
+            _instance->updateEntities(_builder.build());
     }
 
     BatchState &add(String key, String value)
@@ -707,7 +707,6 @@ public:
         return add(String(key), String(value));
     }
 
-    bool send();
     int count() { return _builder.count(); }
     void clear() { _builder.clear(); }
 };
