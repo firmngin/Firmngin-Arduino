@@ -161,27 +161,6 @@ enum OTAAsyncState
     OTA_ASYNC_FAILED
 };
 
-// State name mapping for paths
-static const char *STATE_NAMES[] = {
-    "pm",   // PAYMENT
-    "ds",   // DEVICE_STATUS
-    "pp",   // PENDING_PAYMENT
-    "mop",  // METADATA_ON_PENDING
-    "moe",  // METADATA_ON_EXPIRED
-    "mos",  // METADATA_ON_SUCCESS
-    "init", // INIT
-    "dpin", // DISPLAY_PIN_NUMBER
-    "vr",   // VERIFICATION_RESULT
-    "ur",   // USAGE_RESPONSE
-    "le",   // LIMIT_EXCEEDED
-    "nl",   // NEAR_LIMIT
-    "verif",// VERIFICATIONS
-    "pay",  // PAYMENTS
-    "usg",  // USAGES
-    "rs",   // ENTITIES
-    "active_session", // ACTIVE_SESSION
-};
-
 // Minimal DeviceState class - returns raw payload only
 class DeviceState
 {
@@ -644,11 +623,7 @@ public:
         _builder.reset();
     }
 
-    ~BatchState()
-    {
-        if (_instance != nullptr)
-            _instance->updateEntities(_builder.build());
-    }
+    ~BatchState();
 
     BatchState &add(String key, String value)
     {
@@ -985,5 +960,11 @@ private:
     void setCurrentOrder(const String &orderId);
     void clearCurrentSession();
 };
+
+inline BatchState::~BatchState()
+{
+    if (_instance != nullptr)
+        _instance->updateEntities(_builder.build());
+}
 
 #endif // FIRMNGINKIT_H

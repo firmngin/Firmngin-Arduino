@@ -1,7 +1,7 @@
 /*
  * Firmngin GPS Tracker Example
  *
- * Minimal GPS tracker sending lat/lon via pushBatchEntities()
+ * Minimal GPS tracker sending lat/lon via pushLocation()
  *
  * Hardware: ESP32/ESP8266 + GPS module (NEO-6M, NEO-8M, etc.) on Serial2 (ESP32) or SoftwareSerial (ESP8266)
  * Dependencies: TinyGPS++ by Mikal Hart (PlatformIO: mikalhart/TinyGPSPlus)
@@ -78,17 +78,14 @@ void loop() {
     lastPublish = millis();
 
     if (gps.location.isValid()) {
-      bool sent = fngin.pushBatchEntities()
-        .add("lat", String(gps.location.lat(), 6))
-        .add("lon", String(gps.location.lng(), 6))
-        .send();
+      fngin.pushLocation()
+        .lat(gps.location.lat())
+        .lon(gps.location.lng());
 
-      if (sent) {
-        Serial.print("Location sent: ");
-        Serial.print(gps.location.lat(), 6);
-        Serial.print(", ");
-        Serial.println(gps.location.lng(), 6);
-      }
+      Serial.print("Location sent: ");
+      Serial.print(gps.location.lat(), 6);
+      Serial.print(", ");
+      Serial.println(gps.location.lng(), 6);
     } else {
       Serial.print("No GPS fix. Satellites: ");
       Serial.println(gps.satellites.value());

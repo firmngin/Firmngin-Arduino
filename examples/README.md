@@ -59,10 +59,10 @@ PubSubClient mqtt(net);
 - Uses device-side entity logic
 
 ### GPSTrackerExample
-- GPS tracking with TinyGPS++ and `pushBatchEntities()`
+- GPS tracking with TinyGPS++ and `pushLocation()`
 - Sends `lat` and `lon` every 10 seconds
+- Optional fields: `accuracy()`, `alt()`, `speed()`
 - Compatible with NEO-6M, NEO-8M, and similar GPS modules
-- No library changes needed — zero library overhead
 
 ### AdvancedExample (Coming Soon)
 - Advanced JSON parsing

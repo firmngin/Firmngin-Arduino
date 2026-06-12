@@ -400,12 +400,17 @@ void Firmngin::begin()
     }
     _trustAnchors = new BearSSL::X509List(CA_CERT);
     _wifiClient.setTrustAnchors(_trustAnchors);
-#elif fingerprint != nullptr
-    _wifiClient.setFingerprint(fingerprint);
-    Serial.println("Server validation: Fingerprint");
 #else
-    Serial.println("ERROR: No server validation method configured");
-    return;
+    if (fingerprint != nullptr)
+    {
+        _wifiClient.setFingerprint(fingerprint);
+        Serial.println("Server validation: Fingerprint");
+    }
+    else
+    {
+        Serial.println("ERROR: No server validation method configured");
+        return;
+    }
 #endif
 
 #elif defined(ESP32)
@@ -574,6 +579,27 @@ void Firmngin::on(const char *state, StateCallbackFunction callback)
 {
     _callbacks[String(state)] = callback;
 }
+
+// State name mapping for paths
+static const char *STATE_NAMES[] = {
+    "pm",   // PAYMENT
+    "ds",   // DEVICE_STATUS
+    "pp",   // PENDING_PAYMENT
+    "mop",  // METADATA_ON_PENDING
+    "moe",  // METADATA_ON_EXPIRED
+    "mos",  // METADATA_ON_SUCCESS
+    "init", // INIT
+    "dpin", // DISPLAY_PIN_NUMBER
+    "vr",   // VERIFICATION_RESULT
+    "ur",   // USAGE_RESPONSE
+    "le",   // LIMIT_EXCEEDED
+    "nl",   // NEAR_LIMIT
+    "verif",// VERIFICATIONS
+    "pay",  // PAYMENTS
+    "usg",  // USAGES
+    "rs",   // ENTITIES
+    "active_session", // ACTIVE_SESSION
+};
 
 void Firmngin::on(DeviceStateType state, StateCallbackFunction callback)
 {
@@ -818,7 +844,7 @@ void Firmngin::loop()
     }
 
     static unsigned long lastReconnectAttempt = 0;
-    static int backoffDelay = 5000;
+    static unsigned long backoffDelay = 5000;
     static bool firstConnect = true;
 
     if (!_mqttClient.connected())
