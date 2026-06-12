@@ -218,17 +218,12 @@ Entity sensor("temperature");
 fngin.pushEntity(sensor, "25.5");
 
 // Send batch state updates with builder pattern
-bool sent = fngin.pushBatchEntities()
-    .add(10, String(temperature))      // int key, string value
-    .add(20, String(humidity))         // int key, string value
-    .add("pressure", String(pressure)) // string key, string value
-    .add("light", String(light))       // string key, string value
-    .add("status", status)             // string key, string value
-    .send();
-
-if (sent) {
-    Serial.println("Batch state sent successfully!");
-}
+fngin.pushBatchEntities()
+    .add("temperature", 25.5)
+    .add("humidity", 80)
+    .add("pressure", 1013.2)
+    .add("light", 450)
+    .add("status", "active");
 
 // Or send raw JSON array directly
 fngin.updateEntities("[{\"key\":\"gpio_1\",\"value\":\"1\"},{\"key\":\"gpio_2\",\"value\":\"0\"}]");
