@@ -13,9 +13,6 @@
 #include <SPI.h>
 #include <Ethernet.h>
 
-#define DEVICE_ID "YOUR_DEVICE_ID"
-#define DEVICE_KEY "YOUR_DEVICE_SECRET_KEY"
-
 
 #if defined(ESP8266)
 Firmngin fngin(DEVICE_ID, DEVICE_KEY, CLIENT_CERT, PRIVATE_KEY, SERVER_FINGERPRINT_BYTES);
