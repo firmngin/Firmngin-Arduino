@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Sync VERSION file to library.properties and library.json."""
+"""Sync VERSION file to library.properties, library.json, and firmware headers."""
 
 from __future__ import annotations
 
@@ -13,6 +13,7 @@ ROOT = Path(__file__).resolve().parent.parent
 VERSION_FILE = ROOT / "VERSION"
 LIBRARY_PROPS = ROOT / "library.properties"
 LIBRARY_JSON = ROOT / "library.json"
+VERSION_HEADER = ROOT / "src" / "firmngin_version.h"
 
 
 def read_version() -> str:
@@ -38,6 +39,16 @@ def sync_json(version: str) -> None:
     LIBRARY_JSON.write_text(json.dumps(data, indent=4) + "\n", encoding="utf-8")
 
 
+def sync_version_header(version: str) -> None:
+    VERSION_HEADER.write_text(
+        "#ifndef FIRMNGIN_VERSION_H\n"
+        "#define FIRMNGIN_VERSION_H\n\n"
+        f'#define FIRMNGIN_VERSION "{version}"\n\n'
+        "#endif\n",
+        encoding="utf-8",
+    )
+
+
 def check_sync(version: str) -> bool:
     ok = True
     props = LIBRARY_PROPS.read_text(encoding="utf-8")
@@ -49,6 +60,15 @@ def check_sync(version: str) -> bool:
     if data.get("version") != version:
         print(f"library.json version mismatch (expected {version})")
         ok = False
+    if not VERSION_HEADER.exists():
+        print(f"{VERSION_HEADER.relative_to(ROOT)} missing")
+        ok = False
+    else:
+        header = VERSION_HEADER.read_text(encoding="utf-8")
+        match = re.search(r'^#define\s+FIRMNGIN_VERSION\s+"([^"]+)"$', header, flags=re.MULTILINE)
+        if not match or match.group(1) != version:
+            print(f"src/firmngin_version.h version mismatch (expected {version})")
+            ok = False
     return ok
 
 
@@ -63,6 +83,7 @@ def main() -> int:
 
     sync_properties(version)
     sync_json(version)
+    sync_version_header(version)
     print(f"Synced version {version}")
     return 0
 

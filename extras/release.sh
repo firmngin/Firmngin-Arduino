@@ -60,6 +60,7 @@ cp "$ROOT_DIR/CHANGELOG.md" "$RELEASE_DIR/" 2>/dev/null || echo "CHANGELOG.md no
 # Copy source files
 SOURCE_FILES=(
     "firmngin.h"
+    "firmngin_version.h"
     "firmngin.cpp"
     "json.h"
     "crypto.h"
