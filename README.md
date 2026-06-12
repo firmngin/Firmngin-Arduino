@@ -13,7 +13,10 @@ Check out [firmngin.dev](https://firmngin.dev) for more information.
 - **ESP8266 & ESP32** support
 - **Event-driven API** using `on()` callbacks: raw or typed
 - **Typed objects** for common flows: `Verifications`, `Payments`, `Usages`, `DeviceStates`, `Inits`, `EntityCommand`
-- **mTLS authentication** via `keys.h` (optional but recommended)
+- **GPS Location** — builder-pattern API for sending coordinate updates
+- **Image Upload** — multipart image upload with HMAC-authenticated HTTP POST
+- **OTA Updates** — remote firmware download, SHA256 verification, and installation
+- **Secure connection** via mTLS
 
 ## Installation
 
@@ -33,7 +36,7 @@ For a minimal MQTT-only sketch without Firmngin credentials, see `examples/MqttO
 ### Arduino IDE
 
 1. Install this library (PubSubClient is declared in `library.properties` `depends=` and vendored under `src/PubSubClient/`).
-2. Add your optional `keys.h` next to your sketch if you use mTLS.
+2. Add your `keys.h` next to your sketch for mTLS.
 
 ## Quick Start
 
@@ -103,7 +106,7 @@ void loop() {
 
 ### Device Local End Session
 
-Use `ON_ACTIVE_SESSION` for local sensor, energy, or device-state rules. The callback runs only when the library knows the current order and the device status is `on_active_service`.
+The `ON_ACTIVE_SESSION` callback gives you control to end an active session directly from the device. This is useful for enforcing local rules based on sensor readings, energy consumption, or device state — for example, stopping a machine when a usage limit is reached or a temperature threshold is exceeded. The callback only fires when the device has an active paid order and its status is `on_active_service`.
 
 ```cpp
 Entity energy("energy_kwh");
@@ -120,98 +123,28 @@ void setup() {
 }
 ```
 
-`s.endSession()` publishes a device-local end request with debounce. It returns `false` when the device is not connected, the session was already requested to end, or the local debounce window is still active.
-
 ## mTLS Setup (`keys.h`)
 
-Create a `keys.h` file next to your sketch (do **not** commit this file).
-
 You can download your device's `keys.h` directly from the **Firmngin Dashboard** → Devices → your device → Download `keys.h`.
-
-### Server Validation Modes
-
-Choose how the device validates the MQTT broker's identity:
-
-| Mode | Define | Best For | Pros | Cons |
-|------|--------|----------|------|------|
-| **CA Certificate** | `USE_CA_CERT` | ESP32, Production | Full chain validation, auto-renew safe | Uses more memory |
-| **Fingerprint** | `USE_FINGERPRINT` | ESP8266, Prototypes | Lightweight, memory efficient | Must update if server cert changes |
-
-If you want the server to renew freely without touching the client, use `USE_CA_CERT` and keep the Root CA stable. Only fingerprint mode requires client regeneration when the server certificate changes.
-
-### Using `keys.h` Template
-
-```cpp
-#ifndef KEYS_H
-#define KEYS_H
-
-// Choose ONE validation mode:
-// #define USE_CA_CERT       // Recommended for ESP32
-// #define USE_FINGERPRINT   // Recommended for ESP8266
-
-// Optional. If omitted, the library uses asia-jkt1.firmngin.dev:8883.
-// #define FIRMNGIN_SERVER_ADDR "asia-jkt1.firmngin.dev"
-// #define FIRMNGIN_SERVER_PORT 8883
-
-static const char CA_CERT[] PROGMEM = R"EOF(
------BEGIN CERTIFICATE-----
-[Your CA Certificate]
------END CERTIFICATE-----
-)EOF";
-
-static const char CLIENT_CERT[] PROGMEM = R"EOF(
------BEGIN CERTIFICATE-----
-[Your Client Certificate]
------END CERTIFICATE-----
-)EOF";
-
-static const char PRIVATE_KEY[] PROGMEM = R"EOF(
------BEGIN PRIVATE KEY-----
-[Your Private Key]
------END PRIVATE KEY-----
-)EOF";
-
-// Optional: CA for HTTPS service API access such as api.firmngin.dev.
-// Generated keys.h may include this as SERVICE_CA_CERT.
-// #define HAS_SERVICE_CA_CERT
-// static const char SERVICE_CA_CERT[] PROGMEM = R"EOF(
-// -----BEGIN CERTIFICATE-----
-// [Your Service API CA Certificate]
-// -----END CERTIFICATE-----
-// )EOF";
-
-static const uint8_t SERVER_FINGERPRINT_BYTES[20] PROGMEM = {
-  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
-};
-
-#endif
-```
-
-A template is available in `src/keys.h.template`.
 
 ## Available States
 
 Register handlers using the enum constants. Use `on(ENUM, callback)` for raw callbacks or typed objects for automatic parsing.
 
-| Enum                  | Description                                                    |
-| --------------------- | -------------------------------------------------------------- |
-| `PAYMENT`             | Payment successfully settled                                   |
-| `DEVICE_STATUS`       | Device state changed                                           |
-| `PENDING_PAYMENT`     | Invoice created, waiting for payment                           |
-| `METADATA_ON_PENDING` | Custom metadata for pending payments (raw JSON)                |
-| `METADATA_ON_EXPIRED` | Custom metadata for expired payments (raw JSON)                |
-| `METADATA_ON_SUCCESS` | Custom metadata for successful payments (raw JSON)             |
-| `INIT`                | Initial configuration after connection                         |
-| `DISPLAY_PIN`         | Display PIN on screen for guest verification                   |
-| `VERIFICATION_RESULT` | PIN or precondition check result                               |
-| `VERIFICATIONS`       | Typed callback: handles PIN display and verification result   |
-| `PAYMENTS`            | Typed callback: handles pending and success payments          |
-| `USAGES`              | Typed callback: handles usage, limit exceeded, and near limit |
-| `USAGE_RESPONSE`      | Current MQTT usage and quota                                   |
-| `LIMIT_EXCEEDED`      | Quota limit reached                                            |
-| `NEAR_LIMIT`          | Approaching quota limit                                        |
-| `ENTITIES`            | Received commands to specific entities (e.g. gpio_1)           |
+| Enum                  | Description                                                 |
+| --------------------- | ----------------------------------------------------------- |
+| `PAYMENT`             | Payment successfully settled                                |
+| `DEVICE_STATUS`       | Device state changed                                        |
+| `PENDING_PAYMENT`     | Invoice created, waiting for payment                        |
+| `METADATA_ON_PENDING` | Custom metadata for pending payments (raw JSON)             |
+| `METADATA_ON_EXPIRED` | Custom metadata for expired payments (raw JSON)             |
+| `METADATA_ON_SUCCESS` | Custom metadata for successful payments (raw JSON)          |
+| `INIT`                | Initial configuration after connection                      |
+| `DISPLAY_PIN`         | Display PIN on screen for guest verification                |
+| `VERIFICATION_RESULT` | PIN or precondition check result                            |
+| `VERIFICATIONS`       | Typed callback: handles PIN display and verification result |
+| `PAYMENTS`            | Typed callback: handles pending and success payments        |
+| `ENTITIES`            | Received commands to specific entities (e.g. gpio_1)        |
 
 ### Entity Commands
 
@@ -309,6 +242,124 @@ Manually request initial configuration after connection:
 fngin.requestInit();
 ```
 
+### Location
+
+Send GPS location updates from your device using `pushLocation()`. The method returns a `LocationUpdate` builder object you chain setters on. Data is sent automatically when the builder goes out of scope:
+
+```cpp
+fngin.pushLocation()
+    .lat(-6.208763)
+    .lon(106.845599)
+    .accuracy(5.0f)
+    .alt(10.0f)
+    .speed(1.2f);
+```
+
+### Image Upload
+
+Upload images using `uploadImage()`:
+
+```cpp
+fngin.uploadImage("cam_1", imageData, imageLen, "image/jpeg",
+    [](const char *response) {
+        Serial.println(response);
+    },
+    [](int code, const char *message) {
+        Serial.printf("Upload failed: %d %s\n", code, message);
+    }
+);
+```
+
+| Parameter     | Type                          | Description                                        |
+| ------------- | ----------------------------- | -------------------------------------------------- |
+| `entityKey`   | `const char *`                | Entity key to associate with the image             |
+| `data`        | `uint8_t *`                   | Raw binary image data                              |
+| `len`         | `size_t`                      | Length of the image data in bytes                  |
+| `contentType` | `const char *`                | MIME type, e.g. `"image/jpeg"` or `"image/png"`    |
+| `onSuccess`   | `UploadCallbackFunction`      | Called with server response on HTTP 200            |
+| `onError`     | `UploadErrorCallbackFunction` | Called with HTTP code and error message on failure |
+
+### OTA (Over-the-Air Updates)
+
+The library supports remote firmware updates via OTA. The firmware is downloaded from the Firmngin server, verified with SHA256, and installed using the Arduino `Update` class.
+
+#### Prerequisites
+
+Define compile-time flags in your `platformio.ini` build flags or `keys.h`:
+
+```cpp
+// In platformio.ini build_flags or keys.h:
+-D FIRMNGIN_FIRMWARE_VERSION="1.2.3"
+-D FIRMNGIN_FIRMWARE_TARGET_BOARD="ESP32"     // auto-detected, optional
+-D FIRMNGIN_FIRMWARE_TARGET_MODEL="v2"         // optional
+```
+
+| Flag                             | Default       | Description              |
+| -------------------------------- | ------------- | ------------------------ |
+| `FIRMNGIN_FIRMWARE_VERSION`      | `"0.0.0"`     | Current firmware version |
+| `FIRMNGIN_FIRMWARE_TARGET_BOARD` | Auto-detected | Target board identifier  |
+| `FIRMNGIN_FIRMWARE_TARGET_MODEL` | `""`          | Device model string      |
+
+#### Usage
+
+Set firmware metadata and start listening for OTA triggers:
+
+```cpp
+void setup() {
+    Serial.begin(115200);
+    WiFi.begin(ssid, password);
+    // ...
+
+    fngin.setFirmwareInfo("1.2.3", "ESP32", "v2");
+    // or just version:
+    fngin.setFirmwareInfo("1.2.3");
+
+    fngin.onOTAStatus([](const char *status, const char *message) {
+        Serial.print("OTA: ");
+        Serial.print(status);
+        Serial.print(" — ");
+        Serial.println(message);
+    });
+
+    fngin.begin();
+}
+```
+
+Use the `ON_OTA_STATUS` macro for a declarative handler:
+
+```cpp
+ON_OTA_STATUS(status, msg) {
+    Serial.print("OTA: ");
+    Serial.print(status);
+    Serial.print(" — ");
+    Serial.println(msg);
+}
+```
+
+#### Checking and Performing OTA
+
+```cpp
+// Check if an update is available
+if (fngin.checkOTA()) {
+    Serial.println("Update available, starting download...");
+    fngin.performOTA();
+}
+
+// Or performOTA triggers checkOTA automatically if no firmware ID is known
+fngin.performOTA();
+```
+
+#### OTA State Machine
+
+#### Remote OTA Trigger
+
+OTA can be triggered remotely from the dashboard.
+
+```cpp
+// Disable OTA if needed
+fngin.setEnableOTA(false);
+```
+
 ---
 
 ## Monetization Flow
@@ -352,31 +403,6 @@ fngin.on(PAYMENTS, [](Payments &p) {
     Serial.println(p.price());       // "45000"
     Serial.println(p.orderId());     // "ODR-260506-12345678"
     Serial.println(p.metadata());    // raw JSON string
-});
-```
-
-### Usage Flow
-
-Register **one callback** for the entire usage flow. The same `Usages` object handles usage response, limit exceeded, and near limit:
-
-```cpp
-fngin.on(USAGES, [](Usages &u) {
-    if (u.isNormal()) {
-        Serial.println("Usage normal");
-    }
-    if (u.isNearLimit()) {
-        Serial.println("WARNING: Near limit!");
-    }
-    if (u.isLimitExceeded()) {
-        Serial.println("ERROR: Limit exceeded!");
-    }
-
-    Serial.print("Used:       "); Serial.println(u.used());
-    Serial.print("Limit:      "); Serial.println(u.limit());
-    Serial.print("Remaining:  "); Serial.println(u.remaining());
-    Serial.print("Percentage: "); Serial.println(u.percentage());
-    Serial.print("Reset at:   "); Serial.println(u.resetAt());
-    Serial.print("Granularity:"); Serial.println(u.granularity());
 });
 ```
 
@@ -442,54 +468,50 @@ fngin.on(INIT, [](Inits &i) {
 
 > The `Inits` object is automatically populated when an `init` message arrives. Use `entities()` to get the raw JSON array of GPIO entities. Use the boolean helpers to check merchant status and verification configuration.
 
-## Development Workflow
-
-```bash
-# Edit library in src/
-# Sync to example (legacy BasicExample copy)
-python3 sync_lib.py
-
-# Sync VERSION -> library.properties + library.json
-python3 scripts/sync_version.py
-
-# Native unit tests (JSON, queue format, OTA progress)
-cd test/native && pio test -e native -v
-
-# Build firmware example
-pio run -e esp32dev
-```
-
-CI runs version check, native tests, and ESP32/ESP8266 builds on every push/PR. See `docs/VERSIONING.md` for semver and `depends` policy.
-
 ## API Reference
 
 ### Core Methods
 
-| Function                      | Description                                                      | Return Type  | Possible Values                   |
-| ----------------------------- | ---------------------------------------------------------------- | ------------ | --------------------------------- |
-| `begin()`                     | Initialize library, sync time, setup mTLS, and connect to server | `void`       | N/A                               |
-| `loop()`                      | Maintain connection and process incoming messages                | `void`       | N/A                               |
-| `setDebug(bool)`              | Enable/disable debug output to Serial                            | `void`       | `true`, `false`                   |
-| `setTimezone(int)`            | Set timezone offset from GMT                                     | `void`       | `-12` to `12`                     |
-| `setDaylightOffsetSec(int)`   | Set daylight saving offset in seconds                            | `void`       | Any integer                       |
-| `setNtpServer(const char*)`   | Set NTP server address                                           | `void`       | e.g. `"pool.ntp.org"`             |
-| `setClient(Client&)`          | Use an external network client                                   | `void`       | EthernetClient, other Client impl |
-| `isPlatformSupported()`       | Check if current board is supported                              | `bool`       | `true` (ESP8266/ESP32), `false`   |
-| `on(STATE, callback)`         | Register a raw callback for any state                            | `void`       | See enum constants                |
-| `on(VERIFICATIONS, callback)` | Register typed callback for dpin + vr                            | `void`       | `Verifications &`                 |
-| `on(PAYMENTS, callback)`      | Register typed callback for pp + pm                              | `void`       | `Payments &`                      |
-| `on(USAGES, callback)`        | Register typed callback for ur + le + nl                         | `void`       | `Usages &`                        |
-| `on(DEVICE_STATUS, callback)` | Register typed callback for ds                                   | `void`       | `DeviceStates &`                  |
-| `on(INIT, callback)`          | Register typed callback for init                                 | `void`       | `Inits &`                         |
-| `on(ACTIVE_SESSION, callback)`| Register active session callback                                 | `void`       | `ActiveSession &`                 |
-| `on(ENTITIES, callback)`      | Register typed callback for entity commands                      | `void`       | `EntityCommand &`                 |
-| `onEntity(key, callback)`     | Register callback for a specific entity key (string or object)   | `void`       | `EntityCommand &`                 |
-| `pushEntity(key, value)`      | Send a single entity state update                                | `bool`       | `true` = sent, `false` = fail     |
-| `pushEntity(entity, value)`   | Send entity state using Entity object as key                     | `bool`       | `true` = sent, `false` = fail     |
-| `updateEntities(json)`        | Send multiple entity states as JSON array                        | `bool`       | `true` = sent, `false` = fail     |
-| `pushBatchEntities()`         | Start batch state builder (chain `.add().send()`)                | `BatchState` | Builder object                    |
-| `entity(key)`                 | Read latest local entity value cached by the library             | `EntityValue`| `toString/toFloat/toInt/isOn`     |
-| `requestInit()`               | Request initial configuration                                    | `bool`       | `true` = sent, `false` = fail     |
+| Function                                                       | Description                                                      | Return Type      | Possible Values                             |
+| -------------------------------------------------------------- | ---------------------------------------------------------------- | ---------------- | ------------------------------------------- |
+| `begin()`                                                      | Initialize library, sync time, setup mTLS, and connect to server | `void`           | N/A                                         |
+| `loop()`                                                       | Maintain connection and process incoming messages                | `void`           | N/A                                         |
+| `setDebug(bool)`                                               | Enable/disable debug output to Serial                            | `void`           | `true`, `false`                             |
+| `setTimezone(int)`                                             | Set timezone offset from GMT                                     | `void`           | `-12` to `12`                               |
+| `setDaylightOffsetSec(int)`                                    | Set daylight saving offset in seconds                            | `void`           | Any integer                                 |
+| `setNtpServer(const char*)`                                    | Set NTP server address                                           | `void`           | e.g. `"pool.ntp.org"`                       |
+| `setClient(Client&)`                                           | Use an external network client                                   | `void`           | EthernetClient, other Client impl           |
+| `isPlatformSupported()`                                        | Check if current board is supported                              | `bool`           | `true` (ESP8266/ESP32), `false`             |
+| `on(STATE, callback)`                                          | Register a raw callback for any state                            | `void`           | See enum constants                          |
+| `on(VERIFICATIONS, callback)`                                  | Register typed callback for dpin + vr                            | `void`           | `Verifications &`                           |
+| `on(PAYMENTS, callback)`                                       | Register typed callback for pp + pm                              | `void`           | `Payments &`                                |
+| `on(USAGES, callback)`                                         | Register typed callback for ur + le + nl                         | `void`           | `Usages &`                                  |
+| `on(DEVICE_STATUS, callback)`                                  | Register typed callback for ds                                   | `void`           | `DeviceStates &`                            |
+| `on(INIT, callback)`                                           | Register typed callback for init                                 | `void`           | `Inits &`                                   |
+| `on(ACTIVE_SESSION, callback)`                                 | Register active session callback                                 | `void`           | `ActiveSession &`                           |
+| `on(ENTITIES, callback)`                                       | Register typed callback for entity commands                      | `void`           | `EntityCommand &`                           |
+| `onEntity(key, callback)`                                      | Register callback for a specific entity key (string or object)   | `void`           | `EntityCommand &`                           |
+| `pushEntity(key, value)`                                       | Send a single entity state update (key: string/Entity. value: const char*, String, int, float, double, bool) | `bool`           | `true` = sent, `false` = fail               |
+| `pushEntity(entity, value)`                                    | Send entity state using Entity object as key                     | `bool`           | `true` = sent, `false` = fail               |
+| `pushEntity(key, value, decimals)`                             | Send numeric value with decimal precision                        | `bool`           | `true` = sent, `false` = fail               |
+| `updateEntities(json)`                                         | Send multiple entity states as JSON array                        | `bool`           | `true` = sent, `false` = fail               |
+| `pushBatchEntities()`                                          | Start batch state builder (chain `.add().send()`)                | `BatchState`     | Builder object                              |
+| `entity(key)`                                                  | Read latest local entity value cached by the library             | `EntityValue`    | `toString/toFloat/toInt/isOn`               |
+| `requestInit()`                                                | Request initial configuration                                    | `bool`           | `true` = sent, `false` = fail               |
+| `pushLocation()`                                               | Start location update builder (chain `.lat().lon()`)             | `LocationUpdate` | Builder object                              |
+| `uploadImage(key, data, len, contentType, onSuccess, onError)` | Upload image via multipart POST                                  | `bool`           | `true` = sent, `false` = fail               |
+| `setFirmwareInfo(version, board, model)`                       | Set firmware metadata for OTA                                    | `void`           | N/A                                         |
+| `setFirmwareInfo(version)`                                     | Set firmware version only                                        | `void`           | N/A                                         |
+| `getFirmwareVersion()`                                         | Get current firmware version                                     | `const char*`    | Version string                              |
+| `getFirmwareTargetBoard()`                                     | Get target board identifier                                      | `const char*`    | Board string                                |
+| `getFirmwareTargetModel()`                                     | Get target model string                                          | `const char*`    | Model string                                |
+| `syncFirmwareInfo()`                                           | Push firmware info to server via MQTT                            | `bool`           | `true` = sent, `false` = fail               |
+| `setOTABaseURL(url)`                                           | Set custom OTA server base URL                                   | `void`           | N/A                                         |
+| `setEnableOTA(bool)`                                           | Enable or disable OTA (enabled by default)                       | `void`           | `true`, `false`                             |
+| `enableOTA(bool)`                                              | Alias for setEnableOTA                                           | `void`           | `true`, `false`                             |
+| `checkOTA()`                                                   | Check server for available firmware update                       | `bool`           | `true` = update available                   |
+| `performOTA(manifestUrl)`                                      | Start OTA firmware download and install                          | `bool`           | `true` = started successfully               |
+| `onOTAStatus(callback)`                                        | Register OTA status callback                                     | `void`           | `(const char *status, const char *message)` |
 
 ### Verifications Object
 
@@ -515,6 +537,7 @@ CI runs version check, native tests, and ESP32/ESP8266 builds on every push/PR. 
 | `itemTitle()` | Menu item title                                | `String`    | e.g. `"Cappuccino"`          |
 | `price()`     | Price as string                                | `String`    | e.g. `"45000"`               |
 | `orderId()`   | Human-readable order ID                        | `String`    | e.g. `"ODR-260506-12345678"` |
+| `quantity()`  | Item quantity                                  | `int`       | e.g. `1`                     |
 | `metadata()`  | Raw JSON payload                               | `String`    | Full JSON string             |
 
 ### Usages Object
@@ -580,26 +603,36 @@ CI runs version check, native tests, and ESP32/ESP8266 builds on every push/PR. 
 
 | Function      | Description             | Return Type | Example                 |
 | ------------- | ----------------------- | ----------- | ----------------------- |
-| `Entity(key)` | Constructor with key    | N/A           | `Entity("temperature")` |
+| `Entity(key)` | Constructor with key    | N/A         | `Entity("temperature")` |
 | `key()`       | Get entity key          | `String`    | e.g. `"gpio_1"`         |
 | `gpio()`      | Get GPIO pin (optional) | `int`       | e.g. `2`                |
 | `hasGpio()`   | Check if GPIO is set    | `bool`      | `true`, `false`         |
 
+### LocationUpdate Object
+
+| Function          | Description                             | Return Type        | Possible Values   |
+| ----------------- | --------------------------------------- | ------------------ | ----------------- |
+| `lat(double)`     | Set latitude (required, -90 to 90)      | `LocationUpdate &` | `this` (chaining) |
+| `lon(double)`     | Set longitude (required, -180 to 180)   | `LocationUpdate &` | `this` (chaining) |
+| `accuracy(float)` | Set accuracy in meters (optional, >= 0) | `LocationUpdate &` | `this` (chaining) |
+| `alt(float)`      | Set altitude in meters (optional)       | `LocationUpdate &` | `this` (chaining) |
+| `speed(float)`    | Set speed (optional, >= 0)              | `LocationUpdate &` | `this` (chaining) |
+
 ### Macros
 
-| Macro | Kind | Payload | Style | Example |
-| --- | --- | --- | --- | --- |
-| `ON_ENTITY(entityObject, callback)` | Entity callback | `EntityCommand &` | Inline lambda | `ON_ENTITY(relay1, [](EntityCommand &cmd){ ... });` |
-| `ON_ENTITY_S(key, callback)` | Entity callback | `EntityCommand &` | Inline lambda | `ON_ENTITY_S("led_1", [](EntityCommand &cmd){ ... });` |
-| `fngin.onEntity(key, callback)` | Entity callback | `EntityCommand &` | Runtime registration | `fngin.onEntity("status", [](EntityCommand &cmd){ ... });` |
-| `ON_ENTITIES(cmd)` | Global entity callback | `EntityCommand &` | Macro body | `ON_ENTITIES(cmd) { ... }` |
-| `ON_VERIFICATIONS(v)` | Verification flow | `Verifications &` | Macro body | `ON_VERIFICATIONS(v) { ... }` |
-| `ON_PAYMENTS(p)` | Payment flow | `Payments &` | Macro body | `ON_PAYMENTS(p) { ... }` |
-| `ON_USAGES(u)` | Usage flow | `Usages &` | Macro body | `ON_USAGES(u) { ... }` |
-| `ON_DEVICE_STATUS(ds)` | Device status flow | `DeviceStates &` | Macro body | `ON_DEVICE_STATUS(ds) { ... }` |
-| `ON_INIT(i)` | Init flow | `Inits &` | Macro body | `ON_INIT(i) { ... }` |
-| `ON_OTA_STATUS(status, message)` | OTA status | `const char *, const char *` | Macro body | `ON_OTA_STATUS(status, message) { ... }` |
-| `ON_ACTIVE_SESSION(s)` | Active session | `ActiveSession &` | Macro body | `ON_ACTIVE_SESSION(s) { ... }` |
+| Macro                               | Kind                   | Payload                      | Style                | Example                                                    |
+| ----------------------------------- | ---------------------- | ---------------------------- | -------------------- | ---------------------------------------------------------- |
+| `ON_ENTITY(entityObject, callback)` | Entity callback        | `EntityCommand &`            | Inline lambda        | `ON_ENTITY(relay1, [](EntityCommand &cmd){ ... });`        |
+| `ON_ENTITY_S(key, callback)`        | Entity callback        | `EntityCommand &`            | Inline lambda        | `ON_ENTITY_S("led_1", [](EntityCommand &cmd){ ... });`     |
+| `fngin.onEntity(key, callback)`     | Entity callback        | `EntityCommand &`            | Runtime registration | `fngin.onEntity("status", [](EntityCommand &cmd){ ... });` |
+| `ON_ENTITIES(cmd)`                  | Global entity callback | `EntityCommand &`            | Macro body           | `ON_ENTITIES(cmd) { ... }`                                 |
+| `ON_VERIFICATIONS(v)`               | Verification flow      | `Verifications &`            | Macro body           | `ON_VERIFICATIONS(v) { ... }`                              |
+| `ON_PAYMENTS(p)`                    | Payment flow           | `Payments &`                 | Macro body           | `ON_PAYMENTS(p) { ... }`                                   |
+| `ON_USAGES(u)`                      | Usage flow             | `Usages &`                   | Macro body           | `ON_USAGES(u) { ... }`                                     |
+| `ON_DEVICE_STATUS(ds)`              | Device status flow     | `DeviceStates &`             | Macro body           | `ON_DEVICE_STATUS(ds) { ... }`                             |
+| `ON_INIT(i)`                        | Init flow              | `Inits &`                    | Macro body           | `ON_INIT(i) { ... }`                                       |
+| `ON_OTA_STATUS(status, message)`    | OTA status             | `const char *, const char *` | Macro body           | `ON_OTA_STATUS(status, message) { ... }`                   |
+| `ON_ACTIVE_SESSION(s)`              | Active session         | `ActiveSession &`            | Macro body           | `ON_ACTIVE_SESSION(s) { ... }`                             |
 
 For runtime registration, active session uses:
 
@@ -610,6 +643,10 @@ fngin.on(ON_ACTIVE_SESSION, [](ActiveSession &s) {
     }
 });
 ```
+
+## Contributing
+
+If you find a bug or have a feature request or idea, feel free to create a PR or open an issue.
 
 ## License
 

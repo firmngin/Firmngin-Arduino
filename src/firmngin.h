@@ -3,6 +3,7 @@
 
 #include <Arduino.h>
 #include "PubSubClient/PubSubClient.h"
+#include "firmngin_version.h"
 #include "json.h"
 #include <time.h>
 #include <map>
@@ -102,6 +103,10 @@
 
 #ifndef FIRMNGIN_FIRMWARE_TARGET_MODEL
 #define FIRMNGIN_FIRMWARE_TARGET_MODEL ""
+#endif
+
+#ifndef FIRMNGIN_API_BASE_URL
+#define FIRMNGIN_API_BASE_URL "https://api.firmngin.dev/api/v1"
 #endif
 
 #ifndef FIRMNGIN_OTA_BASE_URL
@@ -395,9 +400,11 @@ public:
         : _key(key) {}
     Entity(const String &key)
         : _key(key) {}
+    Entity(int key)
+        : _key(String(key)) {}
 
     // Getters
-    String key() { return _key; }
+    const String &key() const { return _key; }
 };
 
 class ActiveSession
@@ -416,7 +423,7 @@ public:
     bool canRun() const { return _canRun; }
     String orderId() const { return _orderId; }
     EntityValue entity(const char *key) const;
-    EntityValue entity(Entity &entity) const;
+    EntityValue entity(const Entity &entity) const;
     bool endSession();
 };
 
@@ -576,6 +583,48 @@ inline std::vector<OTACallbackFunction> &deferredOTAStatusRegistrations()
 #define FIRMNGIN_BATCH_BUFFER_SIZE 1024
 #define FIRMNGIN_E2EE_BUFFER_SIZE (FIRMNGIN_BATCH_BUFFER_SIZE + 32)
 
+#define FIRMNGIN_ENTITY_KEY_LAT "lat"
+#define FIRMNGIN_ENTITY_KEY_LON "lon"
+#define FIRMNGIN_ENTITY_KEY_ACCURACY "accuracy"
+#define FIRMNGIN_ENTITY_KEY_ALT "alt"
+#define FIRMNGIN_ENTITY_KEY_SPEED "speed"
+
+class LocationUpdate
+{
+private:
+    Firmngin *_instance;
+    char _buffer[FIRMNGIN_BATCH_BUFFER_SIZE];
+    firmngin_json::ArrayBuilder _builder;
+    double _lat;
+    double _lon;
+    float _accuracy;
+    float _alt;
+    float _speed;
+    bool _hasLat;
+    bool _hasLon;
+    bool _hasAccuracy;
+    bool _hasAlt;
+    bool _hasSpeed;
+    bool _sent;
+
+    bool _dispatch();
+
+public:
+    explicit LocationUpdate(Firmngin *instance);
+    ~LocationUpdate();
+
+    LocationUpdate(const LocationUpdate &) = delete;
+    LocationUpdate &operator=(const LocationUpdate &) = delete;
+    LocationUpdate(LocationUpdate &&other) noexcept;
+    LocationUpdate &operator=(LocationUpdate &&other) noexcept;
+
+    LocationUpdate &lat(double value);
+    LocationUpdate &lon(double value);
+    LocationUpdate &accuracy(float value);
+    LocationUpdate &alt(float value);
+    LocationUpdate &speed(float value);
+};
+
 class BatchState
 {
 private:
@@ -703,12 +752,29 @@ public:
     void onEntity(const char *key, EntityCommandCallbackFunction callback);
 
     bool pushEntity(const char *key, const char *value);
-    bool pushEntity(Entity &entity, const char *value);
+    bool pushEntity(const char *key, const String &value);
+    bool pushEntity(const char *key, int value);
+    bool pushEntity(const char *key, unsigned long value);
+    bool pushEntity(const char *key, float value);
+    bool pushEntity(const char *key, double value);
+    bool pushEntity(const char *key, float value, int decimals);
+    bool pushEntity(const char *key, double value, int decimals);
+    bool pushEntity(const char *key, bool value);
+    bool pushEntity(const Entity &entity, const char *value);
+    bool pushEntity(const Entity &entity, const String &value);
+    bool pushEntity(const Entity &entity, int value);
+    bool pushEntity(const Entity &entity, unsigned long value);
+    bool pushEntity(const Entity &entity, float value);
+    bool pushEntity(const Entity &entity, double value);
+    bool pushEntity(const Entity &entity, float value, int decimals);
+    bool pushEntity(const Entity &entity, double value, int decimals);
+    bool pushEntity(const Entity &entity, bool value);
     bool updateEntities(const char *jsonPayload);
     EntityValue entity(const char *key);
-    EntityValue entity(Entity &entity);
+    EntityValue entity(const Entity &entity);
     bool endSession();
     bool requestInit();
+    LocationUpdate pushLocation();
     BatchState pushBatchEntities();
     void setFirmwareInfo(const char *version, const char *targetBoard, const char *targetModel);
     void setFirmwareInfo(const char *version);

@@ -1,4 +1,5 @@
 #include "firmngin.h"
+#include <math.h>
 
 #if defined(ESP32)
 #include <esp_system.h>
@@ -324,7 +325,8 @@ static void printBanner()
     Serial.println(F(" |_| |_|_|  |_| |_| |_|_| |_|\\__, |_|_| |_(_)__,_|\\___| \\_/  "));
     Serial.println(F("                              __/ |                          "));
     Serial.println(F(" firmngin.dev AIoT Platform  |___/                           "));
-    // Serial.println(F("firmngin.dev AIoT Platform"));
+    Serial.print(F(" Version: "));
+    Serial.println(FIRMNGIN_VERSION);
     Serial.println();
 }
 
@@ -699,7 +701,7 @@ EntityValue ActiveSession::entity(const char *key) const
     return _instance->entity(key);
 }
 
-EntityValue ActiveSession::entity(Entity &entity) const
+EntityValue ActiveSession::entity(const Entity &entity) const
 {
     return this->entity(entity.key().c_str());
 }
@@ -932,6 +934,7 @@ bool Firmngin::connectServer()
                 if (_debug)
                     Serial.println("Successfully connected");
                 syncFirmwareInfo();
+                requestInit();
 
                 if (_queueEnabled && _queueFileReady && _queueCount > 0)
                 {
@@ -1457,9 +1460,109 @@ bool Firmngin::pushEntity(const char *key, const char *value)
     return publishPayload(_topicUpdateEntity.c_str(), b.build());
 }
 
-bool Firmngin::pushEntity(Entity &entity, const char *value)
+bool Firmngin::pushEntity(const char *key, const String &value)
+{
+    return pushEntity(key, value.c_str());
+}
+
+bool Firmngin::pushEntity(const char *key, int value)
+{
+    String s = String(value);
+    return pushEntity(key, s.c_str());
+}
+
+bool Firmngin::pushEntity(const char *key, unsigned long value)
+{
+    String s = String(value);
+    return pushEntity(key, s.c_str());
+}
+
+bool Firmngin::pushEntity(const char *key, float value)
+{
+    String s = String(value);
+    return pushEntity(key, s.c_str());
+}
+
+bool Firmngin::pushEntity(const char *key, double value)
+{
+    String s = String(value);
+    return pushEntity(key, s.c_str());
+}
+
+bool Firmngin::pushEntity(const char *key, float value, int decimals)
+{
+    if (decimals < 0)
+        decimals = 0;
+    if (decimals > 6)
+        decimals = 6;
+    char buf[32];
+    snprintf(buf, sizeof(buf), "%.*f", decimals, value);
+    return pushEntity(key, buf);
+}
+
+bool Firmngin::pushEntity(const char *key, double value, int decimals)
+{
+    if (decimals < 0)
+        decimals = 0;
+    if (decimals > 6)
+        decimals = 6;
+    char buf[32];
+    snprintf(buf, sizeof(buf), "%.*f", decimals, value);
+    return pushEntity(key, buf);
+}
+
+bool Firmngin::pushEntity(const char *key, bool value)
+{
+    return pushEntity(key, value ? "1" : "0");
+}
+
+bool Firmngin::pushEntity(const Entity &entity, const char *value)
 {
     return pushEntity(entity.key().c_str(), value);
+}
+
+bool Firmngin::pushEntity(const Entity &entity, const String &value)
+{
+    return pushEntity(entity.key().c_str(), value);
+}
+
+bool Firmngin::pushEntity(const Entity &entity, int value)
+{
+    String s = String(value);
+    return pushEntity(entity.key().c_str(), s.c_str());
+}
+
+bool Firmngin::pushEntity(const Entity &entity, unsigned long value)
+{
+    String s = String(value);
+    return pushEntity(entity.key().c_str(), s.c_str());
+}
+
+bool Firmngin::pushEntity(const Entity &entity, float value)
+{
+    String s = String(value);
+    return pushEntity(entity.key().c_str(), s.c_str());
+}
+
+bool Firmngin::pushEntity(const Entity &entity, double value)
+{
+    String s = String(value);
+    return pushEntity(entity.key().c_str(), s.c_str());
+}
+
+bool Firmngin::pushEntity(const Entity &entity, float value, int decimals)
+{
+    return pushEntity(entity.key().c_str(), value, decimals);
+}
+
+bool Firmngin::pushEntity(const Entity &entity, double value, int decimals)
+{
+    return pushEntity(entity.key().c_str(), value, decimals);
+}
+
+bool Firmngin::pushEntity(const Entity &entity, bool value)
+{
+    return pushEntity(entity.key().c_str(), value ? "1" : "0");
 }
 
 bool Firmngin::updateEntities(const char *jsonPayload)
@@ -1477,7 +1580,7 @@ EntityValue Firmngin::entity(const char *key)
     return EntityValue(_localEntityValues[entityKey]);
 }
 
-EntityValue Firmngin::entity(Entity &entity)
+EntityValue Firmngin::entity(const Entity &entity)
 {
     return this->entity(entity.key().c_str());
 }
@@ -2384,12 +2487,10 @@ bool Firmngin::uploadImage(const char *entityKey, uint8_t *data, size_t len, con
     }
 
 #if defined(ESP8266) || defined(ESP32)
-    // Build URL: /api/v1/device-camera/upload
-    String url = String("https://") + String(FIRMNGIN_SERVER_ADDR) + ":" + String(FIRMNGIN_SERVER_PORT) + "/api/v1/device-camera/upload";
+    String url = String(FIRMNGIN_API_BASE_URL) + "/device-camera/upload";
 
-    // Build HMAC signature: device_id.timestamp.POST./api/v1/device-camera/upload
     unsigned long ts = time(nullptr);
-    String path = "/api/v1/device-camera/upload";
+    String path = "/device-camera/upload";
     String message = String(_deviceId) + "." + String(ts) + ".POST." + path;
     String signature = hmacSHA256(_deviceKey, message.c_str());
 
@@ -2531,9 +2632,166 @@ bool Firmngin::uploadImage(const char *entityKey, uint8_t *data, size_t len, con
 #endif
 }
 
+LocationUpdate Firmngin::pushLocation()
+{
+    return LocationUpdate(this);
+}
+
 BatchState Firmngin::pushBatchEntities()
 {
     return BatchState(this);
+}
+
+LocationUpdate::LocationUpdate(Firmngin *instance)
+    : _instance(instance),
+      _builder(_buffer, sizeof(_buffer)),
+      _lat(0.0),
+      _lon(0.0),
+      _accuracy(0.0f),
+      _alt(0.0f),
+      _speed(0.0f),
+      _hasLat(false),
+      _hasLon(false),
+      _hasAccuracy(false),
+      _hasAlt(false),
+      _hasSpeed(false),
+      _sent(false)
+{
+    _builder.reset();
+}
+
+LocationUpdate::~LocationUpdate()
+{
+    if (!_sent)
+        _dispatch();
+}
+
+LocationUpdate::LocationUpdate(LocationUpdate &&other) noexcept
+    : _instance(other._instance),
+      _builder(_buffer, sizeof(_buffer)),
+      _lat(other._lat),
+      _lon(other._lon),
+      _accuracy(other._accuracy),
+      _alt(other._alt),
+      _speed(other._speed),
+      _hasLat(other._hasLat),
+      _hasLon(other._hasLon),
+      _hasAccuracy(other._hasAccuracy),
+      _hasAlt(other._hasAlt),
+      _hasSpeed(other._hasSpeed),
+      _sent(false)
+{
+    _builder.reset();
+    other._sent = true;
+}
+
+LocationUpdate &LocationUpdate::operator=(LocationUpdate &&other) noexcept
+{
+    if (this != &other)
+    {
+        _instance = other._instance;
+        _lat = other._lat;
+        _lon = other._lon;
+        _accuracy = other._accuracy;
+        _alt = other._alt;
+        _speed = other._speed;
+        _hasLat = other._hasLat;
+        _hasLon = other._hasLon;
+        _hasAccuracy = other._hasAccuracy;
+        _hasAlt = other._hasAlt;
+        _hasSpeed = other._hasSpeed;
+        _sent = false;
+        other._sent = true;
+    }
+    return *this;
+}
+
+LocationUpdate &LocationUpdate::lat(double value)
+{
+    _lat = value;
+    _hasLat = true;
+    return *this;
+}
+
+LocationUpdate &LocationUpdate::lon(double value)
+{
+    _lon = value;
+    _hasLon = true;
+    return *this;
+}
+
+LocationUpdate &LocationUpdate::accuracy(float value)
+{
+    if (!isnan(value) && value >= 0.0f)
+    {
+        _accuracy = value;
+        _hasAccuracy = true;
+    }
+    return *this;
+}
+
+LocationUpdate &LocationUpdate::alt(float value)
+{
+    if (!isnan(value))
+    {
+        _alt = value;
+        _hasAlt = true;
+    }
+    return *this;
+}
+
+LocationUpdate &LocationUpdate::speed(float value)
+{
+    if (!isnan(value) && value >= 0.0f)
+    {
+        _speed = value;
+        _hasSpeed = true;
+    }
+    return *this;
+}
+
+bool LocationUpdate::_dispatch()
+{
+    if (_sent || _instance == nullptr || !_hasLat || !_hasLon)
+        return false;
+
+    if (_lat < -90.0 || _lat > 90.0 || _lon < -180.0 || _lon > 180.0)
+        return false;
+
+    _builder.reset();
+
+    char valueBuf[24];
+    snprintf(valueBuf, sizeof(valueBuf), "%.6f", _lat);
+    if (!_builder.add(FIRMNGIN_ENTITY_KEY_LAT, valueBuf))
+        return false;
+
+    snprintf(valueBuf, sizeof(valueBuf), "%.6f", _lon);
+    if (!_builder.add(FIRMNGIN_ENTITY_KEY_LON, valueBuf))
+        return false;
+
+    if (_hasAccuracy)
+    {
+        snprintf(valueBuf, sizeof(valueBuf), "%.2f", _accuracy);
+        if (!_builder.add(FIRMNGIN_ENTITY_KEY_ACCURACY, valueBuf))
+            return false;
+    }
+
+    if (_hasAlt)
+    {
+        snprintf(valueBuf, sizeof(valueBuf), "%.2f", _alt);
+        if (!_builder.add(FIRMNGIN_ENTITY_KEY_ALT, valueBuf))
+            return false;
+    }
+
+    if (_hasSpeed)
+    {
+        snprintf(valueBuf, sizeof(valueBuf), "%.2f", _speed);
+        if (!_builder.add(FIRMNGIN_ENTITY_KEY_SPEED, valueBuf))
+            return false;
+    }
+
+    _sent = true;
+    return _instance->updateEntities(_builder.build());
 }
 
 bool BatchState::send()
