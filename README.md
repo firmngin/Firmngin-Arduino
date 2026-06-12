@@ -352,8 +352,6 @@ if (fngin.checkOTA()) {
 fngin.performOTA();
 ```
 
-#### OTA State Machine
-
 #### Remote OTA Trigger
 
 OTA can be triggered remotely from the dashboard.
