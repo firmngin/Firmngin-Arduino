@@ -3,7 +3,13 @@
 
 #include <Arduino.h>
 #include "PubSubClient/PubSubClient.h"
+#if __has_include("firmngin_version.h")
 #include "firmngin_version.h"
+#endif
+
+#ifndef FIRMNGIN_VERSION
+#define FIRMNGIN_VERSION "0.0.0"
+#endif
 #include "json.h"
 #include <time.h>
 #include <map>
