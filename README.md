@@ -490,7 +490,7 @@ fngin.on(INIT, [](Inits &i) {
 | `pushEntity(entity, value)`                                    | Send entity state using Entity object as key                     | `bool`           | `true` = sent, `false` = fail               |
 | `pushEntity(key, value, decimals)`                             | Send numeric value with decimal precision                        | `bool`           | `true` = sent, `false` = fail               |
 | `updateEntities(json)`                                         | Send multiple entity states as JSON array                        | `bool`           | `true` = sent, `false` = fail               |
-| `pushBatchEntities()`                                          | Start batch state builder (chain `.add().send()`)                | `BatchState`     | Builder object                              |
+| `pushBatchEntities()`                                          | Start batch state builder (chain `.add()`)                       | `BatchState`     | Builder object                              |
 | `entity(key)`                                                  | Read latest local entity value cached by the library             | `EntityValue`    | `toString/toFloat/toInt/isOn`               |
 | `requestInit()`                                                | Request initial configuration                                    | `bool`           | `true` = sent, `false` = fail               |
 | `pushLocation()`                                               | Start location update builder (chain `.lat().lon()`)             | `LocationUpdate` | Builder object                              |

@@ -2796,13 +2796,6 @@ bool LocationUpdate::_dispatch()
     return _instance->updateEntities(_builder.build());
 }
 
-bool BatchState::send()
-{
-    if (_instance == nullptr)
-        return false;
-    return _instance->updateEntities(_builder.build());
-}
-
 #if 0
 // Persistent queue implementation moved to queue.cpp.
 void Firmngin::setQueueEnabled(bool enabled)
