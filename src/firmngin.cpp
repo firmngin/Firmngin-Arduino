@@ -10,8 +10,10 @@ extern "C"
 }
 #endif
 
-#if defined(ESP32) || defined(ESP8266)
+#if defined(ESP32)
 #include <Update.h>
+#elif defined(ESP8266)
+#include <Updater.h>
 #endif
 
 const char *NTP_SERVER = "pool.ntp.org";
