@@ -43,42 +43,30 @@ For a minimal MQTT-only sketch without Firmngin credentials, see `examples/MqttO
 ```cpp
 #include <Arduino.h>
 #include <firmngin.h>
-
+#include "keys.h"
 #if defined(ESP8266)
 #include <ESP8266WiFi.h>
 #elif defined(ESP32)
 #include <WiFi.h>
 #endif
 
-#define DEVICE_ID "YOUR_DEVICE_ID"
-#define DEVICE_KEY "YOUR_DEVICE_SECRET_KEY"
+#define relayPin 2
 
 const char *ssid = "YOUR_SSID";
 const char *password = "YOUR_PASSWORD";
 
 Firmngin fngin(DEVICE_ID, DEVICE_KEY);
 
-Entity relay1("gpio_1");
+Entity relay1("2");
 Entity temperature("temperature");
 
 ON_ENTITY(relay1, [](EntityCommand &cmd) {
-  digitalWrite(2, cmd.value() == "1" ? HIGH : LOW);
+  digitalWrite(relayPin, cmd.value() == "1" ? HIGH : LOW);
 });
-
-ON_ENTITY_S("status", [](EntityCommand &cmd) {
-  Serial.println(cmd.value());
-});
-
-ON_ACTIVE_SESSION(s) {
-  if (s.entity(temperature).toFloat() >= 40.0) {
-    s.endSession();
-  }
-}
 
 void setup() {
   Serial.begin(115200);
 
-  // Connect to WiFi
   WiFi.begin(ssid, password);
   while (WiFi.status() != WL_CONNECTED) {
     delay(500);
@@ -86,9 +74,7 @@ void setup() {
   }
   Serial.println("\nWiFi connected");
 
-  pinMode(2, OUTPUT);
-
-  fngin.setDebug(true);
+  pinMode(relayPin, OUTPUT);
   fngin.begin();
 }
 
@@ -473,46 +459,46 @@ fngin.on(INIT, [](Inits &i) {
 
 ### Core Methods
 
-| Function                                                       | Description                                                      | Return Type      | Possible Values                             |
-| -------------------------------------------------------------- | ---------------------------------------------------------------- | ---------------- | ------------------------------------------- |
-| `begin()`                                                      | Initialize library, sync time, setup mTLS, and connect to server | `void`           | N/A                                         |
-| `loop()`                                                       | Maintain connection and process incoming messages                | `void`           | N/A                                         |
-| `setDebug(bool)`                                               | Enable/disable debug output to Serial                            | `void`           | `true`, `false`                             |
-| `setTimezone(int)`                                             | Set timezone offset from GMT                                     | `void`           | `-12` to `12`                               |
-| `setDaylightOffsetSec(int)`                                    | Set daylight saving offset in seconds                            | `void`           | Any integer                                 |
-| `setNtpServer(const char*)`                                    | Set NTP server address                                           | `void`           | e.g. `"pool.ntp.org"`                       |
-| `setClient(Client&)`                                           | Use an external network client                                   | `void`           | EthernetClient, other Client impl           |
-| `isPlatformSupported()`                                        | Check if current board is supported                              | `bool`           | `true` (ESP8266/ESP32), `false`             |
-| `on(STATE, callback)`                                          | Register a raw callback for any state                            | `void`           | See enum constants                          |
-| `on(VERIFICATIONS, callback)`                                  | Register typed callback for dpin + vr                            | `void`           | `Verifications &`                           |
-| `on(PAYMENTS, callback)`                                       | Register typed callback for pp + pm                              | `void`           | `Payments &`                                |
-| `on(USAGES, callback)`                                         | Register typed callback for ur + le + nl                         | `void`           | `Usages &`                                  |
-| `on(DEVICE_STATUS, callback)`                                  | Register typed callback for ds                                   | `void`           | `DeviceStates &`                            |
-| `on(INIT, callback)`                                           | Register typed callback for init                                 | `void`           | `Inits &`                                   |
-| `on(ACTIVE_SESSION, callback)`                                 | Register active session callback                                 | `void`           | `ActiveSession &`                           |
-| `on(ENTITIES, callback)`                                       | Register typed callback for entity commands                      | `void`           | `EntityCommand &`                           |
-| `onEntity(key, callback)`                                      | Register callback for a specific entity key (string or object)   | `void`           | `EntityCommand &`                           |
-| `pushEntity(key, value)`                                       | Send a single entity state update (key: string/Entity. value: const char*, String, int, float, double, bool) | `bool`           | `true` = sent, `false` = fail               |
-| `pushEntity(entity, value)`                                    | Send entity state using Entity object as key                     | `bool`           | `true` = sent, `false` = fail               |
-| `pushEntity(key, value, decimals)`                             | Send numeric value with decimal precision                        | `bool`           | `true` = sent, `false` = fail               |
-| `updateEntities(json)`                                         | Send multiple entity states as JSON array                        | `bool`           | `true` = sent, `false` = fail               |
-| `pushBatchEntities()`                                          | Start batch state builder (chain `.add()`)                       | `BatchState`     | Builder object                              |
-| `entity(key)`                                                  | Read latest local entity value cached by the library             | `EntityValue`    | `toString/toFloat/toInt/isOn`               |
-| `requestInit()`                                                | Request initial configuration                                    | `bool`           | `true` = sent, `false` = fail               |
-| `pushLocation()`                                               | Start location update builder (chain `.lat().lon()`)             | `LocationUpdate` | Builder object                              |
-| `uploadImage(key, data, len, contentType, onSuccess, onError)` | Upload image via multipart POST                                  | `bool`           | `true` = sent, `false` = fail               |
-| `setFirmwareInfo(version, board, model)`                       | Set firmware metadata for OTA                                    | `void`           | N/A                                         |
-| `setFirmwareInfo(version)`                                     | Set firmware version only                                        | `void`           | N/A                                         |
-| `getFirmwareVersion()`                                         | Get current firmware version                                     | `const char*`    | Version string                              |
-| `getFirmwareTargetBoard()`                                     | Get target board identifier                                      | `const char*`    | Board string                                |
-| `getFirmwareTargetModel()`                                     | Get target model string                                          | `const char*`    | Model string                                |
-| `syncFirmwareInfo()`                                           | Push firmware info to server via MQTT                            | `bool`           | `true` = sent, `false` = fail               |
-| `setOTABaseURL(url)`                                           | Set custom OTA server base URL                                   | `void`           | N/A                                         |
-| `setEnableOTA(bool)`                                           | Enable or disable OTA (enabled by default)                       | `void`           | `true`, `false`                             |
-| `enableOTA(bool)`                                              | Alias for setEnableOTA                                           | `void`           | `true`, `false`                             |
-| `checkOTA()`                                                   | Check server for available firmware update                       | `bool`           | `true` = update available                   |
-| `performOTA(manifestUrl)`                                      | Start OTA firmware download and install                          | `bool`           | `true` = started successfully               |
-| `onOTAStatus(callback)`                                        | Register OTA status callback                                     | `void`           | `(const char *status, const char *message)` |
+| Function                                                       | Description                                                                                                   | Return Type      | Possible Values                             |
+| -------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- | ---------------- | ------------------------------------------- |
+| `begin()`                                                      | Initialize library, sync time, setup mTLS, and connect to server                                              | `void`           | N/A                                         |
+| `loop()`                                                       | Maintain connection and process incoming messages                                                             | `void`           | N/A                                         |
+| `setDebug(bool)`                                               | Enable/disable debug output to Serial                                                                         | `void`           | `true`, `false`                             |
+| `setTimezone(int)`                                             | Set timezone offset from GMT                                                                                  | `void`           | `-12` to `12`                               |
+| `setDaylightOffsetSec(int)`                                    | Set daylight saving offset in seconds                                                                         | `void`           | Any integer                                 |
+| `setNtpServer(const char*)`                                    | Set NTP server address                                                                                        | `void`           | e.g. `"pool.ntp.org"`                       |
+| `setClient(Client&)`                                           | Use an external network client                                                                                | `void`           | EthernetClient, other Client impl           |
+| `isPlatformSupported()`                                        | Check if current board is supported                                                                           | `bool`           | `true` (ESP8266/ESP32), `false`             |
+| `on(STATE, callback)`                                          | Register a raw callback for any state                                                                         | `void`           | See enum constants                          |
+| `on(VERIFICATIONS, callback)`                                  | Register typed callback for dpin + vr                                                                         | `void`           | `Verifications &`                           |
+| `on(PAYMENTS, callback)`                                       | Register typed callback for pp + pm                                                                           | `void`           | `Payments &`                                |
+| `on(USAGES, callback)`                                         | Register typed callback for ur + le + nl                                                                      | `void`           | `Usages &`                                  |
+| `on(DEVICE_STATUS, callback)`                                  | Register typed callback for ds                                                                                | `void`           | `DeviceStates &`                            |
+| `on(INIT, callback)`                                           | Register typed callback for init                                                                              | `void`           | `Inits &`                                   |
+| `on(ACTIVE_SESSION, callback)`                                 | Register active session callback                                                                              | `void`           | `ActiveSession &`                           |
+| `on(ENTITIES, callback)`                                       | Register typed callback for entity commands                                                                   | `void`           | `EntityCommand &`                           |
+| `onEntity(key, callback)`                                      | Register callback for a specific entity key (string or object)                                                | `void`           | `EntityCommand &`                           |
+| `pushEntity(key, value)`                                       | Send a single entity state update (key: string/Entity. value: const char\*, String, int, float, double, bool) | `bool`           | `true` = sent, `false` = fail               |
+| `pushEntity(entity, value)`                                    | Send entity state using Entity object as key                                                                  | `bool`           | `true` = sent, `false` = fail               |
+| `pushEntity(key, value, decimals)`                             | Send numeric value with decimal precision                                                                     | `bool`           | `true` = sent, `false` = fail               |
+| `updateEntities(json)`                                         | Send multiple entity states as JSON array                                                                     | `bool`           | `true` = sent, `false` = fail               |
+| `pushBatchEntities()`                                          | Start batch state builder (chain `.add()`)                                                                    | `BatchState`     | Builder object                              |
+| `entity(key)`                                                  | Read latest local entity value cached by the library                                                          | `EntityValue`    | `toString/toFloat/toInt/isOn`               |
+| `requestInit()`                                                | Request initial configuration                                                                                 | `bool`           | `true` = sent, `false` = fail               |
+| `pushLocation()`                                               | Start location update builder (chain `.lat().lon()`)                                                          | `LocationUpdate` | Builder object                              |
+| `uploadImage(key, data, len, contentType, onSuccess, onError)` | Upload image via multipart POST                                                                               | `bool`           | `true` = sent, `false` = fail               |
+| `setFirmwareInfo(version, board, model)`                       | Set firmware metadata for OTA                                                                                 | `void`           | N/A                                         |
+| `setFirmwareInfo(version)`                                     | Set firmware version only                                                                                     | `void`           | N/A                                         |
+| `getFirmwareVersion()`                                         | Get current firmware version                                                                                  | `const char*`    | Version string                              |
+| `getFirmwareTargetBoard()`                                     | Get target board identifier                                                                                   | `const char*`    | Board string                                |
+| `getFirmwareTargetModel()`                                     | Get target model string                                                                                       | `const char*`    | Model string                                |
+| `syncFirmwareInfo()`                                           | Push firmware info to server via MQTT                                                                         | `bool`           | `true` = sent, `false` = fail               |
+| `setOTABaseURL(url)`                                           | Set custom OTA server base URL                                                                                | `void`           | N/A                                         |
+| `setEnableOTA(bool)`                                           | Enable or disable OTA (enabled by default)                                                                    | `void`           | `true`, `false`                             |
+| `enableOTA(bool)`                                              | Alias for setEnableOTA                                                                                        | `void`           | `true`, `false`                             |
+| `checkOTA()`                                                   | Check server for available firmware update                                                                    | `bool`           | `true` = update available                   |
+| `performOTA(manifestUrl)`                                      | Start OTA firmware download and install                                                                       | `bool`           | `true` = started successfully               |
+| `onOTAStatus(callback)`                                        | Register OTA status callback                                                                                  | `void`           | `(const char *status, const char *message)` |
 
 ### Verifications Object
 
