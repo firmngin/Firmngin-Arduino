@@ -38,10 +38,10 @@
 // =========================================================================
 // MQTT SERVER CONFIGURATION (Optional)
 // =========================================================================
-// Default: asia-jkt1.firmngin.dev:8883
+// Default: asia-jkt1.firmngin.dev:58884
 // Uncomment to use custom server:
 // #define FIRMNGIN_SERVER_ADDR "your-custom-server.com"
-// #define FIRMNGIN_SERVER_PORT 8883
+// #define FIRMNGIN_SERVER_PORT 58884
 
 // =========================================================================
 // FIRMWARE / OTA CONFIGURATION
