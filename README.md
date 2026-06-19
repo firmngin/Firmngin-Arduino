@@ -4,7 +4,13 @@
   <img src="https://github.com/firmngin/Firmngin-Arduino/blob/main/logo.png?raw=true" alt="Firmngin" width="96">
 </p>
 
-IoT library for the Firmngin platform. Enables ESP8266/ESP32 devices to accept payments, receive commands, and communicate securely with mTLS support. **Built on top of [PubSubClient](https://github.com/knolleary/pubsubclient)** for MQTT; a vendored copy is included under `src/PubSubClient/`.
+- **Secure mTLS** communication
+- **OTA firmware** updates with SHA256 verification
+- **Image upload** via multipart HTTP POST
+- **GPS location** updates with builder-pattern API
+- **Payment & verification** flows for monetization
+- **Event-driven entity** commands with typed objects
+- **ESP8266 & ESP32** support
 
 Check out [firmngin.dev](https://firmngin.dev) for more information.
 
