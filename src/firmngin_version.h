@@ -1,6 +1,6 @@
 #ifndef FIRMNGIN_VERSION_H
 #define FIRMNGIN_VERSION_H
 
-#define FIRMNGIN_VERSION "1.0.1"
+#define FIRMNGIN_VERSION "1.0.2"
 
 #endif

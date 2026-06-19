@@ -20,7 +20,7 @@
 #endif
 
 #define MQTT_HOST "mqtt.example.com"
-#define MQTT_PORT 8883
+#define MQTT_PORT 58884
 #define MQTT_CLIENT_ID "my-standalone-device"
 #define MQTT_USER "mqtt_user"
 #define MQTT_PASS "mqtt_password"
