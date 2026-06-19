@@ -409,6 +409,10 @@ void Firmngin::begin()
     else
     {
         Serial.println("ERROR: No server validation method configured");
+        delete _clientCertList;
+        delete _clientPrivKey;
+        _clientCertList = nullptr;
+        _clientPrivKey = nullptr;
         return;
     }
 #endif
@@ -486,8 +490,8 @@ void Firmngin::begin()
     _mqttClient.setCallback([this](char *path, byte *payload, unsigned int length)
                             { this->mqttCallback(path, payload, length); });
     _mqttClient.setBufferSize(2048);
-    _mqttClient.setKeepAlive(30);
-    _mqttClient.setSocketTimeout(10);
+    _mqttClient.setKeepAlive(15);
+    _mqttClient.setSocketTimeout(5);
 
     if (!_deferredCallbacksLoaded)
     {
@@ -844,8 +848,7 @@ void Firmngin::loop()
     }
 
     static unsigned long lastReconnectAttempt = 0;
-    static unsigned long backoffDelay = 5000;
-    static bool firstConnect = true;
+    static unsigned long backoffDelay = 2000;
 
     if (!_mqttClient.connected())
     {
@@ -853,11 +856,10 @@ void Firmngin::loop()
         if (now - lastReconnectAttempt > backoffDelay)
         {
             lastReconnectAttempt = now;
-            backoffDelay = min(backoffDelay * 2, 60000UL);
+            backoffDelay = min(backoffDelay * 2, 15000UL);
             if (connectServer())
             {
-                backoffDelay = 5000UL;
-                firstConnect = false;
+                backoffDelay = 2000UL;
             }
         }
     }
@@ -1418,7 +1420,10 @@ void Firmngin::mqttCallback(char *path, byte *payload, unsigned int length)
         int rsIndex = pathStr.indexOf("/rs/");
         String entityKey = pathStr.substring(rsIndex + 4); // after "/rs/"
         EntityCommand cmd(entityKey, payloadStr);
-        _localEntityValues[entityKey] = payloadStr;
+        if (_entityCallbacks.count(entityKey) > 0 || _localEntityValues.count(entityKey) > 0)
+        {
+            _localEntityValues[entityKey] = payloadStr;
+        }
 
         for (const auto &callback : _entityGlobalCallbacks)
         {

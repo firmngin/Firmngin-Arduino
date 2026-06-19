@@ -67,7 +67,7 @@
 
 // Default MQTT Server Configuration
 #define DEFAULT_MQTT_SERVER "asia-jkt1.firmngin.dev"
-#define DEFAULT_MQTT_PORT 8883
+#define DEFAULT_MQTT_PORT 58884
 
 // Check if keys.h exists for mTLS support
 #if __has_include("keys.h")
