@@ -4,13 +4,7 @@
   <img src="https://github.com/firmngin/Firmngin-Arduino/blob/main/logo.png?raw=true" alt="Firmngin" width="96">
 </p>
 
-- **Secure mTLS** communication
-- **OTA firmware** updates with SHA256 verification
-- **Image upload** via multipart HTTP POST
-- **GPS location** updates with builder-pattern API
-- **Payment & verification** flows for monetization
-- **Event-driven entity** commands with typed objects
-- **ESP8266 & ESP32** support
+IoT library for ESP8266/ESP32 with secure communication (mTLS), OTA firmware updates, image upload, GPS location, and payment/verification flows for the Firmngin platform.
 
 Check out [firmngin.dev](https://firmngin.dev) for more information.
 
@@ -32,17 +26,17 @@ Add to your `platformio.ini`:
 
 ```ini
 lib_deps =
-    firmngin/firmngin  ; or symlink to this repo
+    firmngin/firmngin  ; or symlink to https://github.com/firmngin/Firmngin-Arduino
 ```
 
-> MQTT is provided by **PubSubClient** (bundled in `src/PubSubClient/`). You may also depend on upstream `knolleary/PubSubClient` if not using the vendored copy.
+> This library requires **PubSubClient** as an additional dependency. It is bundled (vendored) under `src/PubSubClient/`, so no separate installation is needed.
 
 For a minimal MQTT-only sketch without Firmngin credentials, see `examples/MqttOnlyExample` and `examples/README.md`.
 
 ### Arduino IDE
 
-1. Install this library (PubSubClient is declared in `library.properties` `depends=` and vendored under `src/PubSubClient/`).
-2. Add your `keys.h` next to your sketch for mTLS.
+1. Download the [latest release](https://github.com/firmngin/Firmngin-Arduino/releases) `.zip` and install via **Sketch → Include Library → Add .ZIP Library**, or search **firmngin** in Arduino Library Manager.
+2. Get your `keys.h`: Log in to [firmngin.dev](https://firmngin.dev) → **Device Registry** → select your device → **Secrets** → **Download `keys.h`**. Place it next to your sketch.
 
 ## Quick Start
 
@@ -95,29 +89,6 @@ void loop() {
   }
 }
 ```
-
-### Device Local End Session
-
-The `ON_ACTIVE_SESSION` callback gives you control to end an active session directly from the device. This is useful for enforcing local rules based on sensor readings, energy consumption, or device state — for example, stopping a machine when a usage limit is reached or a temperature threshold is exceeded. The callback only fires when the device has an active paid order and its status is `on_active_service`.
-
-```cpp
-Entity energy("energy_kwh");
-
-ON_ACTIVE_SESSION(s) {
-  if (s.entity(energy).toFloat() >= 10.0) {
-    stopMachine();
-    s.endSession();
-  }
-}
-
-void setup() {
-  fngin.begin();
-}
-```
-
-## mTLS Setup (`keys.h`)
-
-You can download your device's `keys.h` directly from the **Firmngin Dashboard** → Devices → your device → Download `keys.h`.
 
 ## Available States
 
@@ -399,6 +370,25 @@ fngin.on(PAYMENTS, [](Payments &p) {
 });
 ```
 
+### Device Local End Session
+
+The `ON_ACTIVE_SESSION` callback gives you control to end an active session directly from the device. This is useful for enforcing local rules based on sensor readings, energy consumption, or device state — for example, stopping a machine when a usage limit is reached or a temperature threshold is exceeded. The callback only fires when the device has an active paid order and its status is `on_active_service`.
+
+```cpp
+Entity energy("energy_kwh");
+
+ON_ACTIVE_SESSION(s) {
+  if (s.entity(energy).toFloat() >= 10.0) {
+    stopMachine();
+    s.endSession();
+  }
+}
+
+void setup() {
+  fngin.begin();
+}
+```
+
 ### Device State
 
 Register **one callback** for device state changes. The `DeviceStates` object provides boolean helpers for each state:
@@ -498,7 +488,7 @@ fngin.on(INIT, [](Inits &i) {
 | `getFirmwareVersion()`                                         | Get current firmware version                                                                                  | `const char*`    | Version string                              |
 | `getFirmwareTargetBoard()`                                     | Get target board identifier                                                                                   | `const char*`    | Board string                                |
 | `getFirmwareTargetModel()`                                     | Get target model string                                                                                       | `const char*`    | Model string                                |
-| `syncFirmwareInfo()`                                           | Push firmware info to server via MQTT                                                                         | `bool`           | `true` = sent, `false` = fail               |
+| `syncFirmwareInfo()`                                           | Push firmware info to server                                                                                  | `bool`           | `true` = sent, `false` = fail               |
 | `setOTABaseURL(url)`                                           | Set custom OTA server base URL                                                                                | `void`           | N/A                                         |
 | `setEnableOTA(bool)`                                           | Enable or disable OTA (enabled by default)                                                                    | `void`           | `true`, `false`                             |
 | `enableOTA(bool)`                                              | Alias for setEnableOTA                                                                                        | `void`           | `true`, `false`                             |
