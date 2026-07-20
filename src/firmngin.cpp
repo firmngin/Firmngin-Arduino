@@ -1,4 +1,5 @@
 #include "firmngin.h"
+#include "firmngin_identity.h"
 #include <math.h>
 
 #if defined(ESP32)
@@ -20,19 +21,81 @@ const char *NTP_SERVER = "pool.ntp.org";
 int GMT_OFFSET_SEC = 7 * 3600;
 int DAYLIGHT_OFFSET_SEC = 0;
 
-const char *MQTT_SERVER_ADDR = FIRMNGIN_SERVER_ADDR;
-const int MQTT_SERVER_PORT = FIRMNGIN_SERVER_PORT;
+const char *MQTT_SERVER_ADDR = FIRMNGIN_BROKER_ADDR;
+const int MQTT_SERVER_PORT = FIRMNGIN_BROKER_PORT;
 
-static void warnDeviceCredentials(const char *deviceId, const char *deviceKey)
+static bool parseFingerprintHex(const String &hexValue, uint8_t out[20])
 {
+    String hex = hexValue;
+    hex.replace(":", "");
+    hex.replace(" ", "");
+    hex.toUpperCase();
+    if (hex.length() != 40)
+        return false;
+    for (int i = 0; i < 20; i++)
+    {
+        char c1 = hex[i * 2];
+        char c2 = hex[i * 2 + 1];
+        auto nibble = [](char c) -> int {
+            if (c >= '0' && c <= '9')
+                return c - '0';
+            if (c >= 'A' && c <= 'F')
+                return c - 'A' + 10;
+            return -1;
+        };
+        int hi = nibble(c1);
+        int lo = nibble(c2);
+        if (hi < 0 || lo < 0)
+            return false;
+        out[i] = static_cast<uint8_t>((hi << 4) | lo);
+    }
+    return true;
+}
+
+static bool validateDeviceCredentials(const char *deviceId, const char *deviceKey)
+{
+    bool valid = true;
     if (deviceId == nullptr || deviceId[0] == '\0' || strcmp(deviceId, "YOUR_DEVICE_ID") == 0)
     {
-        Serial.println("WARNING: DEVICE_ID not configured in keys.h");
+        Serial.println("ERROR: DEVICE_ID is missing or still uses the template placeholder");
+        valid = false;
     }
     if (deviceKey == nullptr || deviceKey[0] == '\0' || strcmp(deviceKey, "YOUR_DEVICE_SECRET_KEY") == 0)
     {
-        Serial.println("WARNING: DEVICE_KEY not configured in keys.h");
+        Serial.println("ERROR: DEVICE_KEY is missing or still uses the template placeholder");
+        valid = false;
     }
+    return valid;
+}
+
+static bool decodeE2EEKey(const char *hex, uint8_t *output, uint8_t &outputLen)
+{
+    outputLen = 0;
+    if (hex == nullptr)
+        return false;
+    const size_t hexLen = strlen(hex);
+    if (hexLen != 32 && hexLen != 64)
+        return false;
+    const size_t keyLen = hexLen / 2;
+    for (size_t i = 0; i < keyLen; i++)
+    {
+        const char c1 = hex[i * 2];
+        const char c2 = hex[i * 2 + 1];
+        const bool c1Valid = (c1 >= '0' && c1 <= '9') || (c1 >= 'a' && c1 <= 'f') || (c1 >= 'A' && c1 <= 'F');
+        const bool c2Valid = (c2 >= '0' && c2 <= '9') || (c2 >= 'a' && c2 <= 'f') || (c2 >= 'A' && c2 <= 'F');
+        if (!c1Valid || !c2Valid)
+            return false;
+        const uint8_t d1 = (c1 >= '0' && c1 <= '9') ? c1 - '0' : ((c1 | 0x20) - 'a' + 10);
+        const uint8_t d2 = (c2 >= '0' && c2 <= '9') ? c2 - '0' : ((c2 | 0x20) - 'a' + 10);
+        output[i] = (d1 << 4) | d2;
+    }
+    outputLen = static_cast<uint8_t>(keyLen);
+    return true;
+}
+
+static bool isConfiguredPEM(const char *pem, const char *beginMarker)
+{
+    return pem != nullptr && pem[0] != '\0' && strstr(pem, beginMarker) != nullptr && strstr(pem, "[Your") == nullptr;
 }
 
 #if defined(ESP8266)
@@ -194,7 +257,10 @@ void Firmngin::mqttClientSetInsecure(bool insecure)
     _userMqttInsecure = insecure;
 #if defined(ESP8266) || defined(ESP32)
     if (insecure)
+    {
+        Serial.println("WARNING: user MQTT client TLS verification explicitly disabled");
         _userMqttTransport.setInsecure();
+    }
 #endif
 }
 
@@ -236,9 +302,24 @@ String Firmngin::getPathPendingPayment(String deviceId)
     return String("/c/") + deviceId + "/" + PATH_PENDING_PAYMENT;
 }
 
+String Firmngin::getPathPostpaidReady(String deviceId)
+{
+    return String("/c/") + deviceId + "/" + PATH_POSTPAID_READY;
+}
+
 String Firmngin::getPathMetadataOnPending(String deviceId)
 {
     return String("/c/") + deviceId + "/" + PATH_METADATA_ON_PENDING;
+}
+
+String Firmngin::getPathMetadataPostpaidReady(String deviceId)
+{
+    return String("/c/") + deviceId + "/" + PATH_METADATA_POSTPAID_READY;
+}
+
+String Firmngin::getPathMetadataOnActiveService(String deviceId)
+{
+    return String("/c/") + deviceId + "/" + PATH_METADATA_ON_ACTIVE_SERVICE;
 }
 
 String Firmngin::getPathMetadataOnExpired(String deviceId)
@@ -332,12 +413,96 @@ static void printBanner()
     Serial.println();
 }
 
+bool Firmngin::isProvisioned()
+{
+    return FirmnginIdentity::isProvisioned();
+}
+
 void Firmngin::begin()
 {
+    _securityReady = false;
+    _e2eeEnabled = false;
+    _e2eeKeyLen = 0;
+    memset(_e2eeKeyBytes, 0, sizeof(_e2eeKeyBytes));
+
     if (!PLATFORM_SUPPORTED)
         return;
 
-    warnDeviceCredentials(_deviceId, _deviceKey);
+    FirmnginIdentityRecord flashIdentity;
+    const bool firmwareIdentityConfigured = validateDeviceCredentials(_deviceId, _deviceKey);
+#if KEYS_H_AVAILABLE
+    const bool allowFlashIdentity = false;
+#else
+    const bool allowFlashIdentity = _identityLoaded || !firmwareIdentityConfigured;
+#endif
+    _identityLoaded = allowFlashIdentity && FirmnginIdentity::load(flashIdentity);
+    const char *activeDecryptor = nullptr;
+
+    if (_identityLoaded)
+    {
+        _runtimeDeviceId = flashIdentity.deviceId;
+        _runtimeDeviceKey = flashIdentity.deviceKey;
+        _deviceId = _runtimeDeviceId.c_str();
+        _deviceKey = _runtimeDeviceKey.c_str();
+        _runtimeClientCert = flashIdentity.clientCert;
+        _runtimePrivateKey = flashIdentity.privateKey;
+        _runtimeCaCert = flashIdentity.caCert;
+        _runtimeServiceCaCert = flashIdentity.serviceCaCert;
+        _runtimeDecryptor = flashIdentity.decryptor;
+        activeDecryptor = _runtimeDecryptor.c_str();
+        _runtimeUseFingerprint = flashIdentity.tlsMode == "fingerprint" || flashIdentity.tlsMode.length() == 0;
+        _runtimeUseCA = flashIdentity.tlsMode == "ca";
+        if (flashIdentity.fingerprintHex.length() > 0)
+        {
+            _runtimeUseFingerprint = parseFingerprintHex(flashIdentity.fingerprintHex, _runtimeFingerprint);
+        }
+        if (flashIdentity.brokerAddr.length() > 0)
+        {
+            _mqttServer = flashIdentity.brokerAddr;
+        }
+        if (flashIdentity.brokerPort > 0)
+        {
+            _mqttPort = flashIdentity.brokerPort;
+        }
+        if (flashIdentity.apiBaseUrl.length() > 0)
+        {
+            _apiBaseUrl = flashIdentity.apiBaseUrl;
+        }
+        if (flashIdentity.otaBaseUrl.length() > 0)
+        {
+            _otaBaseUrl = flashIdentity.otaBaseUrl;
+        }
+    }
+    else if (!firmwareIdentityConfigured)
+    {
+        Serial.println("ERROR: device identity is not configured; connection blocked");
+        return;
+    }
+    else
+    {
+#if KEYS_H_AVAILABLE
+        activeDecryptor = DECRYPTOR;
+#endif
+    }
+
+    if (!validateDeviceCredentials(_deviceId, _deviceKey))
+    {
+        Serial.println("ERROR: invalid device credentials; connection blocked");
+        return;
+    }
+
+    if (_identityLoaded)
+    {
+        _Debug("Identity loaded from /ffs");
+    }
+    else
+    {
+#if KEYS_H_AVAILABLE
+        _Debug("Identity loaded from keys.h");
+#else
+        _Debug("Identity loaded from firmware configuration");
+#endif
+    }
 
     _topicUpdateEntity = "/d/" + String(_deviceId) + "/ps";
     _topicUpdateEntities = "/d/" + String(_deviceId) + "/psb";
@@ -351,30 +516,45 @@ void Firmngin::begin()
     syncTime();
     printBanner();
 
+#if defined(ESP8266) || defined(ESP32)
+    if (_mqttNoTls)
+    {
+        Serial.println("WARNING: MQTT dev mode — TLS disabled");
+        _mqttClient.setClient(_plainWifiClient);
+    }
+    else
+    {
+#endif
 #if defined(ESP8266)
-    const char *clientCert = _clientCert;
-    const char *privateKey = _privateKey;
+    const char *clientCert = _identityLoaded ? _runtimeClientCert.c_str() : _clientCert;
+    const char *privateKey = _identityLoaded ? _runtimePrivateKey.c_str() : _privateKey;
     const uint8_t *fingerprint = _fingerprint;
 
 #if KEYS_H_AVAILABLE
-    if (clientCert == nullptr)
-        clientCert = CLIENT_CERT;
-    if (privateKey == nullptr)
-        privateKey = PRIVATE_KEY;
+    if (!_identityLoaded)
+    {
+        if (clientCert == nullptr)
+            clientCert = CLIENT_CERT;
+        if (privateKey == nullptr)
+            privateKey = PRIVATE_KEY;
 #if defined(USE_FINGERPRINT)
-    if (fingerprint == nullptr)
-        fingerprint = SERVER_FINGERPRINT_BYTES;
+        if (fingerprint == nullptr)
+            fingerprint = SERVER_FINGERPRINT_BYTES;
 #elif defined(USE_CA_CERT)
-    // ESP8266 CA cert mode: use trust anchors (memory heavy but possible)
-    // Note: user must define USE_CA_CERT in keys.h or sketch
 #else
-    // Default: fingerprint
-    if (fingerprint == nullptr)
-        fingerprint = SERVER_FINGERPRINT_BYTES;
+        if (fingerprint == nullptr)
+            fingerprint = SERVER_FINGERPRINT_BYTES;
 #endif
+    }
 #endif
 
-    if (clientCert == nullptr || privateKey == nullptr)
+    if (_identityLoaded && _runtimeUseFingerprint)
+    {
+        fingerprint = _runtimeFingerprint;
+    }
+
+    if (!isConfiguredPEM(clientCert, "-----BEGIN CERTIFICATE-----") ||
+        !isConfiguredPEM(privateKey, "PRIVATE KEY-----"))
     {
         Serial.println("ERROR: mTLS credentials not configured");
         return;
@@ -393,15 +573,36 @@ void Firmngin::begin()
     _wifiClient.setClientRSACert(_clientCertList, _clientPrivKey);
     _wifiClient.setBufferSizes(512, 512);
 
-#if defined(USE_CA_CERT) && KEYS_H_AVAILABLE
-    if (_trustAnchors != nullptr)
+    if (_identityLoaded && _runtimeUseCA && isConfiguredPEM(_runtimeCaCert.c_str(), "-----BEGIN CERTIFICATE-----"))
     {
-        delete _trustAnchors;
+        if (_trustAnchors != nullptr)
+        {
+            delete _trustAnchors;
+        }
+        _trustAnchors = new BearSSL::X509List(_runtimeCaCert.c_str());
+        _wifiClient.setTrustAnchors(_trustAnchors);
     }
-    _trustAnchors = new BearSSL::X509List(CA_CERT);
-    _wifiClient.setTrustAnchors(_trustAnchors);
-#else
-    if (fingerprint != nullptr)
+#if defined(USE_CA_CERT) && KEYS_H_AVAILABLE
+    else if (!_identityLoaded)
+    {
+        if (!isConfiguredPEM(CA_CERT, "-----BEGIN CERTIFICATE-----"))
+        {
+            Serial.println("ERROR: CA certificate is malformed or still uses the template placeholder; connection blocked");
+            delete _clientCertList;
+            delete _clientPrivKey;
+            _clientCertList = nullptr;
+            _clientPrivKey = nullptr;
+            return;
+        }
+        if (_trustAnchors != nullptr)
+        {
+            delete _trustAnchors;
+        }
+        _trustAnchors = new BearSSL::X509List(CA_CERT);
+        _wifiClient.setTrustAnchors(_trustAnchors);
+    }
+#endif
+    else if (fingerprint != nullptr)
     {
         _wifiClient.setFingerprint(fingerprint);
         Serial.println("Server validation: Fingerprint");
@@ -415,24 +616,30 @@ void Firmngin::begin()
         _clientPrivKey = nullptr;
         return;
     }
-#endif
 
 #elif defined(ESP32)
-    const char *caCert = _caCert;
-    const char *clientCert = _clientCert;
-    const char *privateKey = _privateKey;
+    const char *caCert = _identityLoaded ? _runtimeCaCert.c_str() : _caCert;
+    const char *clientCert = _identityLoaded ? _runtimeClientCert.c_str() : _clientCert;
+    const char *privateKey = _identityLoaded ? _runtimePrivateKey.c_str() : _privateKey;
 
 #if KEYS_H_AVAILABLE
-    // ESP32: Always use CA cert mode (fingerprint not supported in newer ESP32 cores)
-    if (caCert == nullptr)
-        caCert = CA_CERT;
-    if (clientCert == nullptr)
-        clientCert = CLIENT_CERT;
-    if (privateKey == nullptr)
-        privateKey = PRIVATE_KEY;
+    if (!_identityLoaded)
+    {
+        if (caCert == nullptr)
+            caCert = CA_CERT;
+        if (clientCert == nullptr)
+            clientCert = CLIENT_CERT;
+        if (privateKey == nullptr)
+            privateKey = PRIVATE_KEY;
+    }
+#else
+    (void)caCert;
+    (void)clientCert;
+    (void)privateKey;
 #endif
 
-    if (clientCert == nullptr || privateKey == nullptr)
+    if (!isConfiguredPEM(clientCert, "-----BEGIN CERTIFICATE-----") ||
+        !isConfiguredPEM(privateKey, "PRIVATE KEY-----"))
     {
         Serial.println("ERROR: mTLS credentials not configured");
         return;
@@ -449,42 +656,41 @@ void Firmngin::begin()
     }
     else if (caCert != nullptr)
     {
+        if (!isConfiguredPEM(caCert, "-----BEGIN CERTIFICATE-----"))
+        {
+            Serial.println("ERROR: CA certificate is malformed or still uses the template placeholder; connection blocked");
+            return;
+        }
         _wifiClient.setCACert(caCert);
     }
     else
     {
-        _wifiClient.setInsecure();
-        Serial.println("Server validation: DISABLED (no CA cert)");
+        Serial.println("ERROR: CA certificate is not configured; connection blocked");
+        return;
     }
     _wifiClient.setCertificate(clientCert);
     _wifiClient.setPrivateKey(privateKey);
 #endif
-
-#if KEYS_H_AVAILABLE && defined(DECRYPTOR)
-    // Auto-load E2EE key from keys.h
-    if (strlen(DECRYPTOR) > 0)
-    {
-        size_t hexLen = strlen(DECRYPTOR);
-        size_t keyLen = hexLen / 2;
-        if (keyLen > 32)
-            keyLen = 32;
-        for (size_t i = 0; i < keyLen; i++)
-        {
-            char c1 = DECRYPTOR[i * 2];
-            char c2 = DECRYPTOR[i * 2 + 1];
-            uint8_t d1 = (c1 >= 'a') ? (c1 - 'a' + 10) : (c1 >= 'A' ? c1 - 'A' + 10 : c1 - '0');
-            uint8_t d2 = (c2 >= 'a') ? (c2 - 'a' + 10) : (c2 >= 'A' ? c2 - 'A' + 10 : c2 - '0');
-            _e2eeKeyBytes[i] = (d1 << 4) | d2;
-        }
-        _e2eeKeyLen = keyLen;
-        _e2eeEnabled = true;
+#if defined(ESP8266) || defined(ESP32)
     }
 #endif
 
-    if (!_e2eeEnabled && _debug)
+    if (activeDecryptor == nullptr || !decodeE2EEKey(activeDecryptor, _e2eeKeyBytes, _e2eeKeyLen))
     {
-        Serial.println("E2EE: encryption disabled — payload publish blocked for security");
+        Serial.println("ERROR: DECRYPTOR must contain exactly 32 or 64 hexadecimal characters; connection blocked");
+        return;
     }
+#if defined(ESP8266)
+    if (_e2eeKeyLen != 32)
+    {
+        Serial.println("ERROR: ESP8266 requires a 64-character ChaCha20 DECRYPTOR key; connection blocked");
+        _e2eeKeyLen = 0;
+        return;
+    }
+#endif
+    _e2eeEnabled = true;
+
+    _securityReady = true;
 
     _mqttClient.setServer(_mqttServer.c_str(), _mqttPort);
     _mqttClient.setCallback([this](char *path, byte *payload, unsigned int length)
@@ -539,15 +745,32 @@ void Firmngin::begin()
     }
 }
 
-void Firmngin::setMQTTServer(const char *server, int port)
+const char *Firmngin::_activeServiceCACert() const
+{
+    if (_identityLoaded)
+    {
+        const char *runtimeCA = _runtimeServiceCaCert.c_str();
+        return isConfiguredPEM(runtimeCA, "-----BEGIN CERTIFICATE-----") ? runtimeCA : nullptr;
+    }
+#if defined(HAS_SERVICE_CA_CERT)
+    return isConfiguredPEM(SERVICE_CA_CERT, "-----BEGIN CERTIFICATE-----") ? SERVICE_CA_CERT : nullptr;
+#else
+    return nullptr;
+#endif
+}
+
+void Firmngin::setBrokerServer(const char *server, int port, bool noTls)
 {
     _mqttServer = server;
     _mqttPort = port;
+    _mqttNoTls = noTls;
 }
 
 void Firmngin::setInsecure(bool insecure)
 {
     _insecure = insecure;
+    if (insecure)
+        Serial.println("WARNING: TLS certificate verification explicitly disabled");
 }
 
 void Firmngin::setTimezone(int timezone)
@@ -579,6 +802,15 @@ void Firmngin::syncTime()
     _ntpSynced = false;
 }
 
+uint64_t Firmngin::getTimestampMillis()
+{
+    const time_t now = time(nullptr);
+    if (now < 1609459200) // 2021-01-01T00:00:00Z; system clock is not synchronized yet.
+        return 0;
+
+    return static_cast<uint64_t>(now) * UINT64_C(1000);
+}
+
 void Firmngin::on(const char *state, StateCallbackFunction callback)
 {
     _callbacks[String(state)] = callback;
@@ -589,7 +821,10 @@ static const char *STATE_NAMES[] = {
     "pm",   // PAYMENT
     "ds",   // DEVICE_STATUS
     "pp",   // PENDING_PAYMENT
+    "pr",   // POSTPAID_READY
     "mop",  // METADATA_ON_PENDING
+    "mpp",  // METADATA_POSTPAID_READY
+    "moa",  // METADATA_ON_ACTIVE_SERVICE
     "moe",  // METADATA_ON_EXPIRED
     "mos",  // METADATA_ON_SUCCESS
     "init", // INIT
@@ -661,6 +896,8 @@ Payments::Payments(const String &jsonPayload)
     _quantity = 1;
     _isPending = false;
     _isSuccess = false;
+    _isPostPaid = false;
+    _isPrePaid = false;
     _rawPayload = jsonPayload;
 
     firmngin_json::Parser p(jsonPayload.c_str(), jsonPayload.length());
@@ -835,13 +1072,21 @@ void Firmngin::setupLWT()
 
 void Firmngin::loop()
 {
-    if (!PLATFORM_SUPPORTED || WiFi.status() != WL_CONNECTED)
+#if defined(FIRMNGIN_FACTORY_SERIAL) && (FIRMNGIN_FACTORY_SERIAL != 0)
+    if (!_securityReady)
+    {
+        FirmnginIdentity::pollSerialProvision();
+        return;
+    }
+#endif
+
+    if (!PLATFORM_SUPPORTED || !_securityReady || WiFi.status() != WL_CONNECTED)
         return;
 
     if (_ntpSyncStartMs > 0 && !_ntpSynced)
     {
         time_t now = time(nullptr);
-        if (now >= 8 * 3600 * 2 || (unsigned long)(millis() - _ntpSyncStartMs) > 10000UL)
+        if (now >= 1609459200)
         {
             _ntpSynced = true;
         }
@@ -897,8 +1142,23 @@ bool Firmngin::isPlatformSupported()
     return PLATFORM_SUPPORTED;
 }
 
+void Firmngin::_stopMqttTransport()
+{
+#if defined(ESP8266) || defined(ESP32)
+    if (_mqttNoTls)
+        _plainWifiClient.stop();
+    else
+        _wifiClient.stop();
+#endif
+}
+
 bool Firmngin::connectServer()
 {
+    if (!_securityReady || !_e2eeEnabled)
+    {
+        Serial.println("ERROR: secure initialization is incomplete; MQTT connection blocked");
+        return false;
+    }
     setupLWT();
 
     int retryCount = 0;
@@ -917,7 +1177,7 @@ bool Firmngin::connectServer()
             String willMessage = "0";
 
             _mqttClient.disconnect();
-            _wifiClient.stop();
+            _stopMqttTransport();
             delay(100);
             bool connected = _mqttClient.connect(_deviceId, _deviceId, _deviceKey, willPath.c_str(), 1, true, willMessage.c_str());
 
@@ -930,6 +1190,8 @@ bool Firmngin::connectServer()
                 snprintf(topicBuf, sizeof(topicBuf), "/c/%s/pm", _deviceId);
                 _mqttClient.subscribe(topicBuf, qosPayment);
                 snprintf(topicBuf, sizeof(topicBuf), "/c/%s/pp", _deviceId);
+                _mqttClient.subscribe(topicBuf, qosPayment);
+                snprintf(topicBuf, sizeof(topicBuf), "/c/%s/pr", _deviceId);
                 _mqttClient.subscribe(topicBuf, qosPayment);
                 snprintf(topicBuf, sizeof(topicBuf), "/c/%s/mi", _deviceId);
                 _mqttClient.subscribe(topicBuf, qosState);
@@ -948,6 +1210,10 @@ bool Firmngin::connectServer()
                 snprintf(topicBuf, sizeof(topicBuf), "/c/%s/nl", _deviceId);
                 _mqttClient.subscribe(topicBuf, qosState);
                 snprintf(topicBuf, sizeof(topicBuf), "/c/%s/mop", _deviceId);
+                _mqttClient.subscribe(topicBuf, qosState);
+                snprintf(topicBuf, sizeof(topicBuf), "/c/%s/mpp", _deviceId);
+                _mqttClient.subscribe(topicBuf, qosState);
+                snprintf(topicBuf, sizeof(topicBuf), "/c/%s/moa", _deviceId);
                 _mqttClient.subscribe(topicBuf, qosState);
                 snprintf(topicBuf, sizeof(topicBuf), "/c/%s/moe", _deviceId);
                 _mqttClient.subscribe(topicBuf, qosState);
@@ -1204,8 +1470,13 @@ void Firmngin::mqttCallback(char *path, byte *payload, unsigned int length)
 {
     String payloadStr;
 
-    // E2EE: attempt decryption if enabled and key is set
-    if (_e2eeEnabled)
+    // Fail closed: inbound application payloads require authenticated decryption.
+    if (!_e2eeEnabled || _e2eeKeyLen == 0)
+    {
+        Serial.println("E2EE: key unavailable — inbound payload dropped");
+        return;
+    }
+    else
     {
         uint8_t plainBuf[512];
         size_t plainLen = 0;
@@ -1224,15 +1495,6 @@ void Firmngin::mqttCallback(char *path, byte *payload, unsigned int length)
             return;
         }
     }
-    else
-    {
-        payloadStr.reserve(length);
-        for (unsigned int i = 0; i < length; i++)
-        {
-            payloadStr += (char)payload[i];
-        }
-    }
-
     String pathStr = String(path);
     String stateType = "";
 
@@ -1276,14 +1538,15 @@ void Firmngin::mqttCallback(char *path, byte *payload, unsigned int length)
         }
     }
 
-    if ((stateType == "pp" || stateType == "pm") && (_paymentsCallback || !_paymentCallbacks.empty()))
+    if ((stateType == "pp" || stateType == "pm" || stateType == "pr") && (_paymentsCallback || !_paymentCallbacks.empty()))
     {
         Payments p(payloadStr);
         if (p.isValid())
         {
             p.setPending(stateType == "pp");
             p.setSuccess(stateType == "pm");
-            if (stateType == "pm")
+            p.setPaymentType(stateType == "pr");
+            if (stateType == "pm" || stateType == "pr")
             {
                 setCurrentOrder(p.orderId());
             }
@@ -1300,7 +1563,7 @@ void Firmngin::mqttCallback(char *path, byte *payload, unsigned int length)
             }
         }
     }
-    else if (stateType == "pm")
+    else if (stateType == "pm" || stateType == "pr")
     {
         Payments p(payloadStr);
         if (p.isValid())
@@ -1401,19 +1664,47 @@ void Firmngin::mqttCallback(char *path, byte *payload, unsigned int length)
         _mqttClient.publish(pongPath.c_str(), payloadStr.c_str());
     }
 
-    if (pathStr.indexOf("/ot/trg") >= 0)
-    {
+	if (pathStr.indexOf("/ot/trg") >= 0)
+	{
         if (_otaAsyncState != OTA_ASYNC_IDLE)
         {
             _Debug("OTA trigger ignored, download already in progress");
             return;
         }
 
-        _Debug("OTA signal received, performing OTA update...", true);
-        _otaFirmwareID = "";
-        publishOTAStatus("triggered", "Remote OTA triggered by dashboard");
-        performOTA();
-    }
+		char firmwareID[48] = {0};
+		char firmwareSHA256[65] = {0};
+			firmngin_json::Parser trigger(payloadStr.c_str(), payloadStr.length());
+			const size_t firmwareIDLength = trigger.getString("firmware_id", firmwareID, sizeof(firmwareID));
+			const size_t firmwareSHALength = trigger.getString("sha256", firmwareSHA256, sizeof(firmwareSHA256));
+			bool validFirmwareID = firmwareIDLength == 36;
+			for (size_t i = 0; validFirmwareID && i < firmwareIDLength; ++i)
+			{
+				const char c = firmwareID[i];
+				validFirmwareID = (c >= '0' && c <= '9') ||
+				                  (c >= 'a' && c <= 'f') ||
+				                  (c >= 'A' && c <= 'F') || c == '-';
+			}
+			bool validFirmwareSHA = firmwareSHALength == 64;
+			for (size_t i = 0; validFirmwareSHA && i < firmwareSHALength; ++i)
+			{
+				const char c = firmwareSHA256[i];
+				validFirmwareSHA = (c >= '0' && c <= '9') ||
+				                   (c >= 'a' && c <= 'f') ||
+				                   (c >= 'A' && c <= 'F');
+			}
+			if (!validFirmwareID || !validFirmwareSHA)
+			{
+				publishOTAStatus("failed", "Invalid OTA trigger payload");
+			return;
+		}
+
+		_Debug("OTA signal received, performing OTA update...", true);
+		_otaFirmwareID = String(firmwareID);
+		_otaFirmwareSHA256 = String(firmwareSHA256);
+		publishOTAStatus("triggered", "Remote OTA triggered by dashboard");
+		performOTA();
+	}
 
     if (pathStr.indexOf("/rs/") >= 0)
     {
@@ -1489,6 +1780,7 @@ bool Firmngin::pushEntity(const char *key, const char *value)
     b.reset();
     b.add("k", key);
     b.add("v", value);
+    b.add("t", getTimestampMillis());
 
     return publishPayload(_topicUpdateEntity.c_str(), b.build());
 }
@@ -1602,7 +1894,14 @@ bool Firmngin::updateEntities(const char *jsonPayload)
 {
     if (_topicUpdateEntities.length() == 0)
         return false;
-    return publishPayload(_topicUpdateEntities.c_str(), jsonPayload);
+
+    // Wrap array payload with timestamp: {"t":<ms>,"items":[...]}
+    char buf[FIRMNGIN_BATCH_BUFFER_SIZE + 32];
+    firmngin_json::Builder b(buf, sizeof(buf));
+    b.reset();
+    if (!b.add("t", getTimestampMillis()) || !b.addRaw("items", jsonPayload))
+        return false;
+    return publishPayload(_topicUpdateEntities.c_str(), b.build());
 }
 
 EntityValue Firmngin::entity(const char *key)
@@ -1637,6 +1936,7 @@ bool Firmngin::endSession()
     b.add("oid", _currentOrderId.c_str());
     b.add("src", "dev");
     b.add("mid", mid);
+    b.add("t", getTimestampMillis());
 
     bool sent = publishPayload(getPathSessionEnd(_deviceId).c_str(), b.build());
     if (sent)
@@ -1648,7 +1948,11 @@ bool Firmngin::endSession()
 
 bool Firmngin::requestInit()
 {
-    return publishPayload(getPathRequestInit(_deviceId).c_str(), "{}");
+    char buf[64];
+    firmngin_json::Builder b(buf, sizeof(buf));
+    b.reset();
+    b.add("t", getTimestampMillis());
+    return publishPayload(getPathRequestInit(_deviceId).c_str(), b.build());
 }
 
 void Firmngin::runActiveSessionHandlers()
@@ -1883,6 +2187,7 @@ bool Firmngin::otaHTTPGet(const char *path, const char *queryParams, String &res
 
     unsigned long ts = time(nullptr);
     String message = String(_deviceId) + "." + String(ts) + ".GET." + fullPath;
+    const char *activeServiceCA = _activeServiceCACert();
 
 #if defined(ESP8266) || defined(ESP32)
     HTTPClient http;
@@ -1894,12 +2199,12 @@ bool Firmngin::otaHTTPGet(const char *path, const char *queryParams, String &res
     }
     else
     {
-#if defined(HAS_SERVICE_CA_CERT)
-        otaClient.setCACert(SERVICE_CA_CERT);
-#else
-        publishOTAStatus("failed", "Service CA certificate is not configured");
-        return false;
-#endif
+        if (activeServiceCA == nullptr)
+        {
+            publishOTAStatus("failed", "Service CA certificate is not configured");
+            return false;
+        }
+        otaClient.setCACert(activeServiceCA);
     }
     if (_clientCert != nullptr)
         otaClient.setCertificate(_clientCert);
@@ -1910,13 +2215,13 @@ bool Firmngin::otaHTTPGet(const char *path, const char *queryParams, String &res
     otaClient.setBufferSizes(512, 512);
     if (_clientCertList != nullptr && _clientPrivKey != nullptr)
         otaClient.setClientRSACert(_clientCertList, _clientPrivKey);
-#if defined(HAS_SERVICE_CA_CERT)
-    BearSSL::X509List serviceCACert(SERVICE_CA_CERT);
-    otaClient.setTrustAnchors(&serviceCACert);
-#else
-    publishOTAStatus("failed", "Service CA certificate is not configured");
-    return false;
-#endif
+    if (activeServiceCA == nullptr)
+    {
+        publishOTAStatus("failed", "Service CA certificate is not configured");
+        return false;
+    }
+    BearSSL::X509List serviceCATrustAnchors(activeServiceCA);
+    otaClient.setTrustAnchors(&serviceCATrustAnchors);
 #endif
     if (!http.begin(otaClient, url))
     {
@@ -2038,6 +2343,7 @@ bool Firmngin::performOTA(const char *manifestUrl)
 
 #if defined(ESP8266) || defined(ESP32)
     String url = _otaBaseUrl + downloadPath;
+    const char *activeServiceCA = _activeServiceCACert();
 #if defined(ESP32)
     if (_insecure)
     {
@@ -2045,14 +2351,14 @@ bool Firmngin::performOTA(const char *manifestUrl)
     }
     else
     {
-#if defined(HAS_SERVICE_CA_CERT)
-        _otaWifiClient.setCACert(SERVICE_CA_CERT);
-#else
-        _otaAsyncState = OTA_ASYNC_IDLE;
-        publishOTAStatus("failed", "Service CA certificate is not configured");
-        _otaFirmwareID = "";
-        return false;
-#endif
+        if (activeServiceCA == nullptr)
+        {
+            _otaAsyncState = OTA_ASYNC_IDLE;
+            publishOTAStatus("failed", "Service CA certificate is not configured");
+            _otaFirmwareID = "";
+            return false;
+        }
+        _otaWifiClient.setCACert(activeServiceCA);
     }
     if (_clientCert != nullptr)
         _otaWifiClient.setCertificate(_clientCert);
@@ -2062,19 +2368,19 @@ bool Firmngin::performOTA(const char *manifestUrl)
     _otaWifiClient.setBufferSizes(512, 512);
     if (_clientCertList != nullptr && _clientPrivKey != nullptr)
         _otaWifiClient.setClientRSACert(_clientCertList, _clientPrivKey);
-#if defined(HAS_SERVICE_CA_CERT)
+    if (activeServiceCA == nullptr)
+    {
+        _otaAsyncState = OTA_ASYNC_IDLE;
+        publishOTAStatus("failed", "Service CA certificate is not configured");
+        _otaFirmwareID = "";
+        return false;
+    }
     if (_otaTrustAnchors != nullptr)
     {
         delete _otaTrustAnchors;
     }
-    _otaTrustAnchors = new BearSSL::X509List(SERVICE_CA_CERT);
+    _otaTrustAnchors = new BearSSL::X509List(activeServiceCA);
     _otaWifiClient.setTrustAnchors(_otaTrustAnchors);
-#else
-    _otaAsyncState = OTA_ASYNC_IDLE;
-    publishOTAStatus("failed", "Service CA certificate is not configured");
-    _otaFirmwareID = "";
-    return false;
-#endif
 #endif
     if (!_otaHttp.begin(_otaWifiClient, url))
     {
@@ -2520,12 +2826,13 @@ bool Firmngin::uploadImage(const char *entityKey, uint8_t *data, size_t len, con
     }
 
 #if defined(ESP8266) || defined(ESP32)
-    String url = String(FIRMNGIN_API_BASE_URL) + "/device-camera/upload";
+    String url = _apiBaseUrl + "/device-camera/upload";
 
     unsigned long ts = time(nullptr);
     String path = "/device-camera/upload";
     String message = String(_deviceId) + "." + String(ts) + ".POST." + path;
     String signature = hmacSHA256(_deviceKey, message.c_str());
+    const char *activeServiceCA = _activeServiceCACert();
 
     HTTPClient http;
 #if defined(ESP32)
@@ -2536,13 +2843,13 @@ bool Firmngin::uploadImage(const char *entityKey, uint8_t *data, size_t len, con
     }
     else
     {
-#if defined(HAS_SERVICE_CA_CERT)
-        cameraClient.setCACert(SERVICE_CA_CERT);
-#else
-        if (onError)
-            onError(0, "service CA certificate not configured");
-        return false;
-#endif
+        if (activeServiceCA == nullptr)
+        {
+            if (onError)
+                onError(0, "service CA certificate not configured");
+            return false;
+        }
+        cameraClient.setCACert(activeServiceCA);
     }
     if (_clientCert != nullptr)
         cameraClient.setCertificate(_clientCert);
@@ -2553,14 +2860,14 @@ bool Firmngin::uploadImage(const char *entityKey, uint8_t *data, size_t len, con
     cameraClient.setBufferSizes(512, 512);
     if (_clientCertList != nullptr && _clientPrivKey != nullptr)
         cameraClient.setClientRSACert(_clientCertList, _clientPrivKey);
-#if defined(HAS_SERVICE_CA_CERT)
-    BearSSL::X509List serviceCACert(SERVICE_CA_CERT);
-    cameraClient.setTrustAnchors(&serviceCACert);
-#else
-    if (onError)
-        onError(0, "service CA certificate not configured");
-    return false;
-#endif
+    if (activeServiceCA == nullptr)
+    {
+        if (onError)
+            onError(0, "service CA certificate not configured");
+        return false;
+    }
+    BearSSL::X509List serviceCATrustAnchors(activeServiceCA);
+    cameraClient.setTrustAnchors(&serviceCATrustAnchors);
 #endif
 
     if (!http.begin(cameraClient, url))

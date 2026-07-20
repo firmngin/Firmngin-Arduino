@@ -62,6 +62,8 @@ SOURCE_FILES=(
     "firmngin.h"
     "firmngin_version.h"
     "firmngin.cpp"
+    "firmngin_identity.h"
+    "firmngin_identity.cpp"
     "json.h"
     "crypto.h"
     "crypto.cpp"
@@ -90,6 +92,7 @@ echo "Copying examples..."
 if [ -d "$ROOT_DIR/examples" ]; then
     echo "Using examples from the root folder"
     (cd "$ROOT_DIR" && tar \
+        --exclude='examples/FactoryFleetExample' \
         --exclude='*/keys.h' \
         --exclude='*/.DS_Store' \
         --exclude='*/.!*.DS_Store' \
@@ -102,9 +105,12 @@ else
     echo "void loop() {}" >> "$RELEASE_DIR/examples/BasicExample/BasicExample.ino"
 fi
 
+rm -rf "$RELEASE_DIR/examples/FactoryFleetExample"
+
 # Validate that all primary examples are present
 EXPECTED_EXAMPLES=(
     "BasicExample/BasicExample.ino"
+    "BasicFleetFactory/BasicFleetFactory.ino"
     "BasicMonetizeExample/BasicMonetizeExample.ino"
     "BatchStateExample/BatchStateExample.ino"
     "DisplayPINExample/DisplayPINExample.ino"
