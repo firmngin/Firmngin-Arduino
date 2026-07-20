@@ -36,6 +36,7 @@ bool Firmngin::otaHTTPGet(const char *path, const char *queryParams, String &res
 
     unsigned long ts = time(nullptr);
     String message = String(_deviceId) + "." + String(ts) + ".GET." + fullPath;
+    const char *activeServiceCA = _activeServiceCACert();
 
 #if defined(ESP8266) || defined(ESP32)
     HTTPClient http;
@@ -47,12 +48,12 @@ bool Firmngin::otaHTTPGet(const char *path, const char *queryParams, String &res
     }
     else
     {
-#if defined(HAS_SERVICE_CA_CERT)
-        otaClient.setCACert(SERVICE_CA_CERT);
-#else
-        publishOTAStatus("failed", "Service CA certificate is not configured");
-        return false;
-#endif
+        if (activeServiceCA == nullptr)
+        {
+            publishOTAStatus("failed", "Service CA certificate is not configured");
+            return false;
+        }
+        otaClient.setCACert(activeServiceCA);
     }
     if (_clientCert != nullptr)
         otaClient.setCertificate(_clientCert);
@@ -63,13 +64,13 @@ bool Firmngin::otaHTTPGet(const char *path, const char *queryParams, String &res
     otaClient.setBufferSizes(512, 512);
     if (_clientCertList != nullptr && _clientPrivKey != nullptr)
         otaClient.setClientRSACert(_clientCertList, _clientPrivKey);
-#if defined(HAS_SERVICE_CA_CERT)
-    BearSSL::X509List serviceCACert(SERVICE_CA_CERT);
-    otaClient.setTrustAnchors(&serviceCACert);
-#else
-    publishOTAStatus("failed", "Service CA certificate is not configured");
-    return false;
-#endif
+    if (activeServiceCA == nullptr)
+    {
+        publishOTAStatus("failed", "Service CA certificate is not configured");
+        return false;
+    }
+    BearSSL::X509List serviceCATrustAnchors(activeServiceCA);
+    otaClient.setTrustAnchors(&serviceCATrustAnchors);
 #endif
     if (!http.begin(otaClient, url))
     {
@@ -89,12 +90,15 @@ bool Firmngin::otaHTTPGet(const char *path, const char *queryParams, String &res
     {
         _Debug("OTA HTTP " + String(httpCode) + ": " + url);
         _Debug("OTA HTTP error: " + http.errorToString(httpCode));
+        String errorMessage = "Manifest request failed (HTTP " + String(httpCode) + ")";
+        publishOTAStatus("failed", errorMessage.c_str());
     }
 
     http.end();
     return ok;
 #else
     (void)responseBody;
+    publishOTAStatus("failed", "OTA HTTPS is not supported on this platform");
     return false;
 #endif
 }
@@ -126,10 +130,7 @@ bool Firmngin::checkOTA()
 
     String body;
     if (!otaHTTPGet("/manifest", query, body))
-    {
-        publishOTAStatus("failed", "Manifest request failed");
         return false;
-    }
 
     int idStart = body.indexOf("\"firmware_id\":\"");
     int verStart = body.indexOf("\"version\":\"");
@@ -191,6 +192,7 @@ bool Firmngin::performOTA(const char *manifestUrl)
 
 #if defined(ESP8266) || defined(ESP32)
     String url = _otaBaseUrl + downloadPath;
+    const char *activeServiceCA = _activeServiceCACert();
 #if defined(ESP32)
     if (_insecure)
     {
@@ -198,14 +200,14 @@ bool Firmngin::performOTA(const char *manifestUrl)
     }
     else
     {
-#if defined(HAS_SERVICE_CA_CERT)
-        _otaWifiClient.setCACert(SERVICE_CA_CERT);
-#else
-        _otaAsyncState = OTA_ASYNC_IDLE;
-        publishOTAStatus("failed", "Service CA certificate is not configured");
-        _otaFirmwareID = "";
-        return false;
-#endif
+        if (activeServiceCA == nullptr)
+        {
+            _otaAsyncState = OTA_ASYNC_IDLE;
+            publishOTAStatus("failed", "Service CA certificate is not configured");
+            _otaFirmwareID = "";
+            return false;
+        }
+        _otaWifiClient.setCACert(activeServiceCA);
     }
     if (_clientCert != nullptr)
         _otaWifiClient.setCertificate(_clientCert);
@@ -215,19 +217,19 @@ bool Firmngin::performOTA(const char *manifestUrl)
     _otaWifiClient.setBufferSizes(512, 512);
     if (_clientCertList != nullptr && _clientPrivKey != nullptr)
         _otaWifiClient.setClientRSACert(_clientCertList, _clientPrivKey);
-#if defined(HAS_SERVICE_CA_CERT)
+    if (activeServiceCA == nullptr)
+    {
+        _otaAsyncState = OTA_ASYNC_IDLE;
+        publishOTAStatus("failed", "Service CA certificate is not configured");
+        _otaFirmwareID = "";
+        return false;
+    }
     if (_otaTrustAnchors != nullptr)
     {
         delete _otaTrustAnchors;
     }
-    _otaTrustAnchors = new BearSSL::X509List(SERVICE_CA_CERT);
+    _otaTrustAnchors = new BearSSL::X509List(activeServiceCA);
     _otaWifiClient.setTrustAnchors(_otaTrustAnchors);
-#else
-    _otaAsyncState = OTA_ASYNC_IDLE;
-    publishOTAStatus("failed", "Service CA certificate is not configured");
-    _otaFirmwareID = "";
-    return false;
-#endif
 #endif
     if (!_otaHttp.begin(_otaWifiClient, url))
     {

@@ -40,8 +40,11 @@
 // =========================================================================
 // Default: asia-jkt1.firmngin.dev:58884
 // Uncomment to use custom server:
-// #define FIRMNGIN_SERVER_ADDR "your-custom-server.com"
-// #define FIRMNGIN_SERVER_PORT 58884
+// #define FIRMNGIN_BROKER_ADDR "192.168.1.100"
+// #define FIRMNGIN_BROKER_PORT 1883
+
+// Development only — plain MQTT without TLS (never use in production)
+// #define FIRMNGIN_NO_TLS 1
 
 // =========================================================================
 // FIRMWARE / OTA CONFIGURATION
@@ -56,13 +59,16 @@
 //   --build-property "build.extra_flags=-DFIRMNGIN_FIRMWARE_VERSION=\"1.2.0\""
 //
 // TARGET_BOARD is auto-detected (ESP32/ESP8266), no config needed.
-// API_BASE_URL defaults to api.firmngin.dev; override only for self-hosted:
+// API_BASE_URL defaults to ota.firmngin.dev; override only for self-hosted:
 //   build_flags = -D FIRMNGIN_API_BASE_URL=\"https://custom.api.com/api/v1\"
-// OTA_BASE_URL defaults to firmngin.dev; override only for self-hosted:
+// OTA_BASE_URL defaults to ota.firmngin.dev; override only for self-hosted:
 //   build_flags = -D FIRMNGIN_OTA_BASE_URL=\"https://custom.api.com/api/v1/ota\"
+//
+// Factory provisioning stores the identity and required service settings.
+// Older factory identities must be provisioned again.
 
 // =========================================================================
-// CERTIFICATES (Required for all modes)
+// CERTIFICATES (Required unless FIRMNGIN_NO_TLS is enabled)
 // =========================================================================
 
 // CA Certificate (PEM format) - Used when USE_CA_CERT is defined
@@ -86,8 +92,9 @@ static const char PRIVATE_KEY[] PROGMEM = R"EOF(
 -----END PRIVATE KEY-----
 )EOF";
 
-// Service API CA Certificate - used for HTTPS API access (api.firmngin.dev).
-// Optional. If omitted, service API/OTA HTTPS may use insecure mode for testing.
+// Service API CA Certificate - used for HTTPS API access (ota.firmngin.dev).
+// Required for verified service API/OTA HTTPS. Missing CA material fails closed.
+// Insecure mode is used only when the application explicitly calls setInsecure(true).
 // #define HAS_SERVICE_CA_CERT
 // static const char SERVICE_CA_CERT[] PROGMEM = R"EOF(
 // -----BEGIN CERTIFICATE-----
@@ -105,7 +112,7 @@ static const uint8_t SERVER_FINGERPRINT_BYTES[20] PROGMEM = {
 // AES-128-GCM (16 bytes = 32 hex chars) or ChaCha20-Poly1305 (32 bytes = 64 hex chars)
 // Derived from HMAC-SHA256(MQTT_MASTER_SECRET_KEY, device_id)
 // Set this to the hex-encoded device key from the backend.
-// If E2EE is not used, leave as empty string.
-static const char DECRYPTOR[] PROGMEM = "";
+// Required. Missing, empty, malformed, or unsupported-length keys are rejected.
+static const char DECRYPTOR[] PROGMEM = "REPLACE_WITH_32_OR_64_HEX_CHARACTERS";
 
 #endif // KEYS_H

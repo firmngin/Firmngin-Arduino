@@ -2,6 +2,7 @@
 #define FIRMNGIN_JSON_H
 
 #include <Arduino.h>
+#include <stdint.h>
 
 namespace firmngin_json {
 
@@ -278,6 +279,36 @@ public:
 
         _first = false;
         return true;
+    }
+
+    // Add a key with raw JSON value (not escaped). Returns false if buffer is full.
+    bool addRaw(const char* key, const char* rawValue) {
+        size_t needed = 4; // "":"",
+        needed += strlen(key) * 2;
+        needed += strlen(rawValue);
+        if (!_first) needed += 1;    // comma
+
+        if (_pos + needed >= _cap) return false;
+
+        if (!_first) _buf[_pos++] = ',';
+        _buf[_pos++] = '"';
+        _pos += _jsonEscape(key, _buf + _pos, _cap - _pos);
+        _buf[_pos++] = '"';
+        _buf[_pos++] = ':';
+        // Copy raw value without escaping
+        size_t len = strlen(rawValue);
+        memcpy(_buf + _pos, rawValue, len);
+        _pos += len;
+
+        _first = false;
+        return true;
+    }
+
+    // Add an unsigned 64-bit integer as a JSON number (without quotes).
+    bool add(const char* key, uint64_t value) {
+        char rawValue[21]; // UINT64_MAX is 20 decimal digits plus terminator.
+        snprintf(rawValue, sizeof(rawValue), "%llu", static_cast<unsigned long long>(value));
+        return addRaw(key, rawValue);
     }
 
     // Finalize: adds closing brace and returns pointer to buffer.

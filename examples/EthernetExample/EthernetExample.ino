@@ -28,8 +28,8 @@ byte mac[] = { 0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0xED };
 EthernetClient ethClient;
 
 // Entity keys for relay control
-Entity relay1("gpio_1");
-Entity relay2("gpio_2");
+Entity relay1(1);
+Entity relay2(2);
 
 ON_ENTITY(relay1, [](EntityCommand &cmd) {
   digitalWrite(2, cmd.value() == "1" ? HIGH : LOW);
@@ -77,7 +77,5 @@ void loop()
 {
   // Maintain Ethernet connection
   Ethernet.maintain();
-  
   fngin.loop();
-  delay(100);
 }

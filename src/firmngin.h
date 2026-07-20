@@ -77,26 +77,54 @@
 #define KEYS_H_AVAILABLE 0
 #endif
 
-#if !KEYS_H_AVAILABLE
+#if !KEYS_H_AVAILABLE && !(defined(FIRMNGIN_FACTORY_SERIAL) && (FIRMNGIN_FACTORY_SERIAL != 0))
 #warning "keys.h not found — copy keys.h.template to your sketch folder and set DEVICE_ID / DEVICE_KEY"
 #endif
 
 #ifndef DEVICE_ID
+#if !(defined(FIRMNGIN_FACTORY_SERIAL) && (FIRMNGIN_FACTORY_SERIAL != 0))
 #warning "DEVICE_ID not defined in keys.h"
+#endif
 #define DEVICE_ID "YOUR_DEVICE_ID"
 #endif
 
 #ifndef DEVICE_KEY
+#if !(defined(FIRMNGIN_FACTORY_SERIAL) && (FIRMNGIN_FACTORY_SERIAL != 0))
 #warning "DEVICE_KEY not defined in keys.h"
+#endif
 #define DEVICE_KEY "YOUR_DEVICE_SECRET_KEY"
 #endif
 
+#ifndef FIRMNGIN_BROKER_ADDR
+#ifdef FIRMNGIN_SERVER_ADDR
+#define FIRMNGIN_BROKER_ADDR FIRMNGIN_SERVER_ADDR
+#else
+#define FIRMNGIN_BROKER_ADDR DEFAULT_MQTT_SERVER
+#endif
+#endif
+
+#ifndef FIRMNGIN_BROKER_PORT
+#ifdef FIRMNGIN_SERVER_PORT
+#define FIRMNGIN_BROKER_PORT FIRMNGIN_SERVER_PORT
+#else
+#define FIRMNGIN_BROKER_PORT DEFAULT_MQTT_PORT
+#endif
+#endif
+
 #ifndef FIRMNGIN_SERVER_ADDR
-#define FIRMNGIN_SERVER_ADDR DEFAULT_MQTT_SERVER
+#define FIRMNGIN_SERVER_ADDR FIRMNGIN_BROKER_ADDR
 #endif
 
 #ifndef FIRMNGIN_SERVER_PORT
-#define FIRMNGIN_SERVER_PORT DEFAULT_MQTT_PORT
+#define FIRMNGIN_SERVER_PORT FIRMNGIN_BROKER_PORT
+#endif
+
+#ifndef FIRMNGIN_DEV_NO_TLS
+#define FIRMNGIN_DEV_NO_TLS 0
+#endif
+
+#ifndef FIRMNGIN_NO_TLS
+#define FIRMNGIN_NO_TLS FIRMNGIN_DEV_NO_TLS
 #endif
 
 #ifndef FIRMNGIN_FIRMWARE_VERSION
@@ -112,18 +140,21 @@
 #endif
 
 #ifndef FIRMNGIN_API_BASE_URL
-#define FIRMNGIN_API_BASE_URL "https://api.firmngin.dev/api/v1"
+#define FIRMNGIN_API_BASE_URL "https://ota.firmngin.dev/api/v1"
 #endif
 
 #ifndef FIRMNGIN_OTA_BASE_URL
-#define FIRMNGIN_OTA_BASE_URL "https://api.firmngin.dev/api/v1/ota"
+#define FIRMNGIN_OTA_BASE_URL "https://ota.firmngin.dev/api/v1/ota"
 #endif
 
 #define OK "on_ok"
 #define PATH_PAYMENT "pm"
 #define PATH_DEVICE_STATUS "ds"
 #define PATH_PENDING_PAYMENT "pp"
+#define PATH_POSTPAID_READY "pr"
 #define PATH_METADATA_ON_PENDING "mop"
+#define PATH_METADATA_POSTPAID_READY "mpp"
+#define PATH_METADATA_ON_ACTIVE_SERVICE "moa"
 #define PATH_METADATA_ON_EXPIRED "moe"
 #define PATH_METADATA_ON_SUCCESS "mos"
 #define PATH_PING "pi"
@@ -135,7 +166,10 @@ enum DeviceStateType
     PAYMENT,
     DEVICE_STATUS,
     PENDING_PAYMENT,
+    POSTPAID_READY,
     METADATA_ON_PENDING,
+    METADATA_POSTPAID_READY,
+    METADATA_ON_ACTIVE_SERVICE,
     METADATA_ON_EXPIRED,
     METADATA_ON_SUCCESS,
     INIT,
@@ -211,16 +245,20 @@ private:
     int _quantity;
     bool _isPending;
     bool _isSuccess;
+    bool _isPostPaid;
+    bool _isPrePaid;
     bool _valid;
     String _rawPayload;
 
 public:
-    Payments() : _itemTitle(""), _price(""), _orderId(""), _quantity(1), _isPending(false), _isSuccess(false), _valid(false) {}
+    Payments() : _itemTitle(""), _price(""), _orderId(""), _quantity(1), _isPending(false), _isSuccess(false), _isPostPaid(false), _isPrePaid(false), _valid(false) {}
     Payments(const String &jsonPayload);
 
     bool isValid() const { return _valid; }
     bool isPending() const { return _isPending; }
     bool isSuccess() const { return _isSuccess; }
+    bool isPostPaid() const { return _isPostPaid; }
+    bool isPrePaid() const { return _isPrePaid; }
     String itemTitle() const { return _itemTitle; }
     String price() const { return _price; }
     String orderId() const { return _orderId; }
@@ -229,6 +267,7 @@ public:
 
     void setPending(bool pending) { _isPending = pending; }
     void setSuccess(bool success) { _isSuccess = success; }
+    void setPaymentType(bool postPaid) { _isPostPaid = postPaid; _isPrePaid = !postPaid; }
 };
 
 // Typed payload for usage flow
@@ -489,6 +528,8 @@ inline std::vector<OTACallbackFunction> &deferredOTAStatusRegistrations()
 #define ON_PAYMENT(stateVar) FNGIN_ON_STATE(PAYMENT, "pm", stateVar)
 #define ON_PENDING_PAYMENT(stateVar) FNGIN_ON_STATE(PENDING_PAYMENT, "pp", stateVar)
 #define ON_METADATA_ON_PENDING(stateVar) FNGIN_ON_STATE(METADATA_ON_PENDING, "mop", stateVar)
+#define ON_METADATA_POSTPAID_READY(stateVar) FNGIN_ON_STATE(METADATA_POSTPAID_READY, "mpp", stateVar)
+#define ON_METADATA_ON_ACTIVE_SERVICE(stateVar) FNGIN_ON_STATE(METADATA_ON_ACTIVE_SERVICE, "moa", stateVar)
 #define ON_METADATA_ON_EXPIRED(stateVar) FNGIN_ON_STATE(METADATA_ON_EXPIRED, "moe", stateVar)
 #define ON_METADATA_ON_SUCCESS(stateVar) FNGIN_ON_STATE(METADATA_ON_SUCCESS, "mos", stateVar)
 #define ON_DISPLAY_PIN(stateVar) FNGIN_ON_STATE(DISPLAY_PIN, "dpin", stateVar)
@@ -566,7 +607,7 @@ inline std::vector<OTACallbackFunction> &deferredOTAStatusRegistrations()
 
 // BatchState: Builder pattern for batch entity updates
 #define FIRMNGIN_BATCH_BUFFER_SIZE 1024
-#define FIRMNGIN_E2EE_BUFFER_SIZE (FIRMNGIN_BATCH_BUFFER_SIZE + 32)
+#define FIRMNGIN_E2EE_BUFFER_SIZE (FIRMNGIN_BATCH_BUFFER_SIZE + 64)
 
 #define FIRMNGIN_ENTITY_KEY_LAT "lat"
 #define FIRMNGIN_ENTITY_KEY_LON "lon"
@@ -723,12 +764,13 @@ public:
 
     void begin();
     void loop();
+    static bool isProvisioned();
     void setDebug(bool debug);
     void setTimezone(int timezone);
     void setDaylightOffsetSec(int daylightOffsetSec);
     void setNtpServer(const char *ntpServer);
     void setClient(Client &client);
-    void setMQTTServer(const char *server, int port);
+    void setBrokerServer(const char *server, int port, bool noTls = (FIRMNGIN_NO_TLS != 0));
     void setInsecure(bool insecure = true);
     bool isPlatformSupported();
 
@@ -805,11 +847,24 @@ public:
 private:
     const char *_deviceId;
     const char *_deviceKey;
+    bool _identityLoaded = false;
+    bool _runtimeUseFingerprint = false;
+    bool _runtimeUseCA = false;
+    uint8_t _runtimeFingerprint[20] = {0};
+    String _runtimeDeviceId;
+    String _runtimeDeviceKey;
+    String _runtimeClientCert;
+    String _runtimePrivateKey;
+    String _runtimeCaCert;
+    String _runtimeServiceCaCert;
+    String _runtimeDecryptor;
+    String _apiBaseUrl = FIRMNGIN_API_BASE_URL;
     bool _debug;
     unsigned long _lastMQTTAttempt;
 
 #if defined(ESP8266) || defined(ESP32)
     WiFiClientSecure _wifiClient;
+    WiFiClient _plainWifiClient;
 #else
     WiFiClient _wifiClient;
 #endif
@@ -822,7 +877,7 @@ private:
 #endif
     PubSubClient _userMqttClient;
     uint16_t _userMqttBufferSize = FIRMNGIN_MQTT_CLIENT_DEFAULT_BUFFER_SIZE;
-    bool _userMqttInsecure = true;
+    bool _userMqttInsecure = false;
     bool _userMqttPrepared = false;
 
     unsigned long _delayRetryMQTT = 5000;
@@ -831,7 +886,9 @@ private:
 
     String _mqttServer;
     int _mqttPort;
+    bool _mqttNoTls = (FIRMNGIN_NO_TLS != 0);
     bool _insecure = false;
+    bool _securityReady = false;
     bool _e2eeEnabled = false;
     uint8_t _e2eeKeyBytes[32] = {0};
     uint8_t _e2eeKeyLen = 0;
@@ -917,11 +974,15 @@ private:
 
     void _Debug(String message, bool newLine = true);
     bool connectServer();
+    void _stopMqttTransport();
     void mqttCallback(char *path, byte *payload, unsigned int length);
     String getPathPayment(String deviceId);
     String getPathDeviceStatus(String deviceId);
     String getPathPendingPayment(String deviceId);
+    String getPathPostpaidReady(String deviceId);
     String getPathMetadataOnPending(String deviceId);
+    String getPathMetadataPostpaidReady(String deviceId);
+    String getPathMetadataOnActiveService(String deviceId);
     String getPathMetadataOnExpired(String deviceId);
     String getPathMetadataOnSuccess(String deviceId);
     String getPathInit(String deviceId);
@@ -939,8 +1000,10 @@ private:
     String getOTATriggerPath(String deviceId);
     void syncTime();
     void setupLWT();
+    uint64_t getTimestampMillis(); // Returns Unix epoch milliseconds, or 0 until system time is valid
     bool publishPayload(const char *path, const char *payload, bool retained = false);
     bool publishOTAStatus(const char *status, const char *message);
+    const char *_activeServiceCACert() const;
     int normalizeOTAProgress(const char *status, const char *message);
 
     // Persistent queue helpers
