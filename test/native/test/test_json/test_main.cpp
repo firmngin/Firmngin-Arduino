@@ -24,6 +24,15 @@ void test_json_builder_escape()
     TEST_ASSERT_NOT_NULL(strstr(out, "\\\""));
 }
 
+void test_json_builder_uint64_is_unquoted()
+{
+    char buf[64];
+    firmngin_json::Builder b(buf, sizeof(buf));
+    b.reset();
+    TEST_ASSERT_TRUE(b.add("t", UINT64_C(1783652400123)));
+    TEST_ASSERT_EQUAL_STRING("{\"t\":1783652400123}", b.build());
+}
+
 void test_json_array_builder()
 {
     char buf[256];
@@ -46,6 +55,7 @@ int main(int argc, char **argv)
     UNITY_BEGIN();
     RUN_TEST(test_json_parser_string_and_int);
     RUN_TEST(test_json_builder_escape);
+    RUN_TEST(test_json_builder_uint64_is_unquoted);
     RUN_TEST(test_json_array_builder);
     return UNITY_END();
 }

@@ -52,6 +52,15 @@ PubSubClient mqtt(net);
 - Manual trigger via hardware button or backend entity command
 - Periodic auto-check for updates
 
+### BasicFleetFactory
+- Generic firmware for mass production (factory line / fleet batch)
+- No `keys.h` — identity injected via `firmngin-factory unit provision`
+- Build with `-DFIRMNGIN_FACTORY_SERIAL=1` (PlatformIO `platformio.ini` or Arduino IDE `build_opt.h`)
+- Factory serial protocol v3 advertises `service_ca` and `service_endpoint` support through the
+  `FNGIN_HELLO` handshake. Rebuild the merged factory image after updating the
+  library; older merged images cannot store the HTTPS Service CA.
+- Upload `.bin` as Master Fleet Firmware, then flash + provision each unit
+
 ### ActiveSessionEndExample
 - Simple `ON_ACTIVE_SESSION` usage
 - Also available as `fngin.on(ON_ACTIVE_SESSION, [](ActiveSession &s){ ... });`

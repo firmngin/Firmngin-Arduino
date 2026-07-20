@@ -67,5 +67,4 @@ void setup()
 void loop()
 {
   fngin.loop();
-  delay(100);
 }

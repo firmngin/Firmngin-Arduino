@@ -32,11 +32,7 @@ const char *password = "YOUR_PASSWORD";
 
 TinyGPSPlus gps;
 
-#if defined(ESP8266)
-Firmngin fngin(DEVICE_ID, DEVICE_KEY, CLIENT_CERT, PRIVATE_KEY, SERVER_FINGERPRINT_BYTES);
-#elif defined(ESP32)
-Firmngin fngin(DEVICE_ID, DEVICE_KEY, SERVER_FINGERPRINT_BYTES, CLIENT_CERT, PRIVATE_KEY);
-#endif
+Firmngin fngin(DEVICE_ID, DEVICE_KEY);
 
 unsigned long lastPublish = 0;
 const unsigned long publishInterval = 10000;  // 10 detik
@@ -45,8 +41,6 @@ void setup() {
   Serial.begin(115200);
   gpsSerial.begin(GPS_BAUD);
   delay(1000);
-
-  Serial.println("=== GPS Tracker Example ===");
 
   // Connect to WiFi
   WiFi.begin(ssid, password);
@@ -61,9 +55,16 @@ void setup() {
   Serial.println(WiFi.localIP());
 
   fngin.setDebug(true);
+  fngin.setTimezone(7);
+
+#if defined(ESP8266)
+  fngin.setFirmwareInfo("0.0.0", "ESP8266", "esp8266:esp8266:generic");
+#else
+  fngin.setFirmwareInfo("0.0.0", "ESP32", "esp32:esp32:esp32");
+#endif
   fngin.begin();
 
-  Serial.println("Waiting for GPS fix...");
+  Serial.println("Waiting for GPS...");
 }
 
 void loop() {

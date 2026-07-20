@@ -30,9 +30,17 @@ void setupStates()
     if (p.isSuccess()) {
       Serial.println("Payment success!");
     }
+    if (p.isPostPaid()) {
+        Serial.println("Postpaid order ready!");
+    }
+
+    if (p.isPrePaid()) {
+        Serial.println("Prepaid order update!");
+    }
     Serial.print("Item:  "); Serial.println(p.itemTitle());
     Serial.print("Price: "); Serial.println(p.price());
     Serial.print("Order: "); Serial.println(p.orderId());
+    Serial.print("Quantity: "); Serial.println(p.quantity());
   });
 
   // Device status handler
@@ -44,24 +52,6 @@ void setupStates()
   // Pending payment handler (raw)
   fngin.on(PENDING_PAYMENT, [](DeviceState state) {
     Serial.println("Payment pending received");
-    Serial.println(state.getPayload());
-  });
-
-  // Metadata on pending payments (raw JSON from menu_items.on_pending_payments)
-  fngin.on(METADATA_ON_PENDING, [](DeviceState state) {
-    Serial.println("On pending payments received");
-    Serial.println(state.getPayload());
-  });
-
-  // Metadata on expired payments (raw JSON from menu_items.on_expired_payments)
-  fngin.on(METADATA_ON_EXPIRED, [](DeviceState state) {
-    Serial.println("On expired payments received");
-    Serial.println(state.getPayload());
-  });
-
-  // Metadata on success payments (raw JSON from menu_items.on_success_payments)
-  fngin.on(METADATA_ON_SUCCESS, [](DeviceState state) {
-    Serial.println("On success payments received");
     Serial.println(state.getPayload());
   });
 }

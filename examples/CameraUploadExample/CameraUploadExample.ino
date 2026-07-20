@@ -292,7 +292,7 @@ void setup() {
     // Configure Firmngin
     fngin.setDebug(true);
     fngin.setFirmwareInfo("1.0.0", "ESP32-CAM", "esp32:esp32:esp32cam");
-    fngin.setOTABaseURL("https://api.firmngin.dev/api/v1/ota");
+    fngin.setOTABaseURL("https://ota.firmngin.dev/api/v1/ota");
     fngin.setTimezone(7);  // GMT+7 Indonesia
 
     // Initialize Firmngin MQTT connection
