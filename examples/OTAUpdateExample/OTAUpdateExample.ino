@@ -39,7 +39,7 @@ void setup() {
   fngin.setFirmwareInfo("1.0.0", "ESP32", "esp32:esp32:esp32");
 #endif
 
-  // OTA status callback
+  // You can also use the OTA status callback to get the status of the OTA update.
   fngin.onOTAStatus([](const char *status, const char *message) {
     Serial.print("[OTA] ");
     Serial.print(status);
@@ -53,7 +53,7 @@ void setup() {
 void loop() {
   fngin.loop();
 
-  // Check for updates every 5 minutes
+  //You can check for updates every 5 minutes or you can use the fngin.checkOTA() function to check for updates.
   static unsigned long lastCheck = 0;
   if (millis() - lastCheck > 300000) {
     lastCheck = millis();

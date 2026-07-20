@@ -20,11 +20,7 @@
 const char *ssid = "YOUR_SSID";
 const char *password = "YOUR_PASSWORD";
 
-#if defined(ESP8266)
-Firmngin fngin(DEVICE_ID, DEVICE_KEY, CLIENT_CERT, PRIVATE_KEY, SERVER_FINGERPRINT_BYTES);
-#elif defined(ESP32)
-Firmngin fngin(DEVICE_ID, DEVICE_KEY, SERVER_FINGERPRINT_BYTES, CLIENT_CERT, PRIVATE_KEY);
-#endif
+Firmngin fngin(DEVICE_ID, DEVICE_KEY);
 
 // Method 1: Direct pushEntity (manual)
 unsigned long lastManualPush = 0;

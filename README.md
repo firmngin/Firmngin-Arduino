@@ -38,6 +38,12 @@ For a minimal MQTT-only sketch without Firmngin credentials, see `examples/MqttO
 1. Download the [latest release](https://github.com/firmngin/Firmngin-Arduino/releases) `.zip` and install via **Sketch → Include Library → Add .ZIP Library**, or search **firmngin** in Arduino Library Manager.
 2. Get your `keys.h`: Log in to [firmngin.dev](https://firmngin.dev) → **Device Registry** → select your device → **Secrets** → **Download `keys.h`**. Place it next to your sketch.
 
+Security initialization is fail-closed. `keys.h` must contain non-placeholder `DEVICE_ID` and `DEVICE_KEY`, valid TLS trust/client credentials, and a `DECRYPTOR` containing exactly 32 or 64 hexadecimal characters. Missing or malformed material blocks MQTT connection, and inbound MQTT payloads are never accepted as plaintext. `setInsecure(true)` and broker `noTls` mode remain explicit development-only opt-ins and emit warnings when selected.
+
+### Factory provisioning
+
+Fleet master firmware built with `FIRMNGIN_FACTORY_SERIAL=1` uses factory protocol v3 and must be exported as a complete `.merged.bin`. Provisioning stores the device identity, TLS material, service CA, and HTTPS API/OTA base URLs under `/firmnginfs`. Both service URLs must be absolute `https://` URLs; missing or malformed endpoints fail provisioning before the metadata is committed. Older factory identities must be provisioned again.
+
 ## Quick Start
 
 ```cpp
@@ -99,7 +105,10 @@ Register handlers using the enum constants. Use `on(ENUM, callback)` for raw cal
 | `PAYMENT`             | Payment successfully settled                                |
 | `DEVICE_STATUS`       | Device state changed                                        |
 | `PENDING_PAYMENT`     | Invoice created, waiting for payment                        |
+| `POSTPAID_READY`      | Postpaid order is ready and active on the device             |
 | `METADATA_ON_PENDING` | Custom metadata for pending payments (raw JSON)             |
+| `METADATA_POSTPAID_READY` | Optional custom metadata paired with postpaid ready (`mpp`) |
+| `METADATA_ON_ACTIVE_SERVICE` | Custom metadata sent when the service becomes active (`moa`) |
 | `METADATA_ON_EXPIRED` | Custom metadata for expired payments (raw JSON)             |
 | `METADATA_ON_SUCCESS` | Custom metadata for successful payments (raw JSON)          |
 | `INIT`                | Initial configuration after connection                      |
@@ -351,7 +360,7 @@ fngin.on(VERIFICATIONS, [](Verifications &v) {
 
 ### Payment Flow
 
-Register **one callback** for the entire payment flow. The same `Payments` object handles both pending and success:
+Register **one callback** for the entire order/payment flow. The same `Payments` object handles prepaid pending (`pp`), payment success (`pm`), and postpaid ready (`pr`):
 
 ```cpp
 fngin.on(PAYMENTS, [](Payments &p) {
@@ -363,10 +372,26 @@ fngin.on(PAYMENTS, [](Payments &p) {
         Serial.println("Payment received!");
     }
 
+    if (p.isPostPaid()) {
+        Serial.println("Postpaid order ready!");
+    }
+
+    if (p.isPrePaid()) {
+        Serial.println("Prepaid order update!");
+    }
+
     Serial.println(p.itemTitle());   // "Cappuccino"
     Serial.println(p.price());       // "45000"
     Serial.println(p.orderId());     // "ODR-260506-12345678"
     Serial.println(p.metadata());    // raw JSON string
+});
+```
+
+Active-service metadata is a separate raw JSON event. It does not change the semantics of `pr`, `pp`, or `pm`:
+
+```cpp
+fngin.on(METADATA_ON_ACTIVE_SERVICE, [](DeviceState state) {
+    Serial.println(state.getPayload());
 });
 ```
 
@@ -517,6 +542,8 @@ fngin.on(INIT, [](Inits &i) {
 | `isValid()`   | Check if payload was parsed successfully       | `bool`      | `true`, `false`              |
 | `isPending()` | True if this is a pp (pending payment) message | `bool`      | `true`, `false`              |
 | `isSuccess()` | True if this is a pm (payment success) message | `bool`      | `true`, `false`              |
+| `isPostPaid()` | True for a `pr` postpaid order message | `bool` | `true`, `false` |
+| `isPrePaid()` | True for a `pp` or `pm` prepaid order message | `bool` | `true`, `false` |
 | `itemTitle()` | Menu item title                                | `String`    | e.g. `"Cappuccino"`          |
 | `price()`     | Price as string                                | `String`    | e.g. `"45000"`               |
 | `orderId()`   | Human-readable order ID                        | `String`    | e.g. `"ODR-260506-12345678"` |

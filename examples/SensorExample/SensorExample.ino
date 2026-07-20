@@ -26,11 +26,7 @@ const char *password = "YOUR_PASSWORD";
 #define DHT_TYPE DHT22
 DHT dht(DHT_PIN, DHT_TYPE);
 
-#if defined(ESP8266)
-Firmngin fngin(DEVICE_ID, DEVICE_KEY, CLIENT_CERT, PRIVATE_KEY, SERVER_FINGERPRINT_BYTES);
-#elif defined(ESP32)
-Firmngin fngin(DEVICE_ID, DEVICE_KEY, SERVER_FINGERPRINT_BYTES, CLIENT_CERT, PRIVATE_KEY);
-#endif
+Firmngin fngin(DEVICE_ID, DEVICE_KEY);f
 
 unsigned long lastBatchPush = 0;
 
@@ -91,6 +87,4 @@ void loop()
       Serial.println("Batch pushed: temperature, humidity, heat_index");
     }
   }
-
-  delay(2000);  // Read sensor every 2 seconds
 }
