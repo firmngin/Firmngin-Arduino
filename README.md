@@ -13,10 +13,9 @@ Check out [firmngin.dev](https://firmngin.dev) for more information.
 - **ESP8266 & ESP32** support
 - **Event-driven API** using `on()` callbacks: raw or typed
 - **Typed objects** for common flows: `Verifications`, `Payments`, `Dispenses`, `Usages`, `DeviceStates`, `Inits`, `EntityCommand`
-- **Vending mode** — detect service vs vending and handle SKU dispense callbacks
-- **GPS Location** — builder-pattern API for sending coordinate updates
-- **Image Upload** — multipart image upload with HMAC-authenticated HTTP POST
-- **OTA Updates** — remote firmware download, SHA256 verification, and installation
+- **Vending mode** for vendingmachines and handle SKU dispense callbacks
+- **Image Upload** image upload for camera-equipped devices
+- **OTA Updates** easy firmware update and secure
 - **Secure connection** via mTLS
 
 ## Installation
@@ -101,23 +100,23 @@ void loop() {
 
 Register handlers using the enum constants. Use `on(ENUM, callback)` for raw callbacks or typed objects for automatic parsing.
 
-| Enum                  | Description                                                 |
-| --------------------- | ----------------------------------------------------------- |
-| `PAYMENT`             | Payment successfully settled                                |
-| `DEVICE_STATUS`       | Device state changed                                        |
-| `PENDING_PAYMENT`     | Invoice created, waiting for payment                        |
-| `POSTPAID_READY`      | Postpaid order is ready and active on the device             |
-| `METADATA_ON_PENDING` | Custom metadata for pending payments (raw JSON)             |
-| `METADATA_POSTPAID_READY` | Optional custom metadata paired with postpaid ready |
-| `METADATA_ON_ACTIVE_SERVICE` | Custom metadata sent when the service becomes active |
-| `METADATA_ON_EXPIRED` | Custom metadata for expired payments (raw JSON)             |
-| `METADATA_ON_SUCCESS` | Custom metadata for successful payments (raw JSON)          |
-| `INIT`                | Initial configuration after connection                      |
-| `DISPLAY_PIN`         | Display PIN on screen for guest verification                |
-| `VERIFICATION_RESULT` | PIN or precondition check result                            |
-| `VERIFICATIONS`       | Typed callback: handles PIN display and verification result |
-| `PAYMENTS`            | Typed callback: handles pending and success payments        |
-| `ENTITIES`            | Received commands to specific entities (e.g. gpio_1)        |
+| Enum                         | Description                                                 |
+| ---------------------------- | ----------------------------------------------------------- |
+| `PAYMENT`                    | Payment successfully settled                                |
+| `DEVICE_STATUS`              | Device state changed                                        |
+| `PENDING_PAYMENT`            | Invoice created, waiting for payment                        |
+| `POSTPAID_READY`             | Postpaid order is ready and active on the device            |
+| `METADATA_ON_PENDING`        | Custom metadata for pending payments (raw JSON)             |
+| `METADATA_POSTPAID_READY`    | Optional custom metadata paired with postpaid ready         |
+| `METADATA_ON_ACTIVE_SERVICE` | Custom metadata sent when the service becomes active        |
+| `METADATA_ON_EXPIRED`        | Custom metadata for expired payments (raw JSON)             |
+| `METADATA_ON_SUCCESS`        | Custom metadata for successful payments (raw JSON)          |
+| `INIT`                       | Initial configuration after connection                      |
+| `DISPLAY_PIN`                | Display PIN on screen for guest verification                |
+| `VERIFICATION_RESULT`        | PIN or precondition check result                            |
+| `VERIFICATIONS`              | Typed callback: handles PIN display and verification result |
+| `PAYMENTS`                   | Typed callback: handles pending and success payments        |
+| `ENTITIES`                   | Received commands to specific entities (e.g. gpio_1)        |
 
 ### Entity Commands
 
@@ -576,18 +575,18 @@ ON_DISPENSES(d) {
 
 ### Payments Object
 
-| Function      | Description                                    | Return Type | Possible Values              |
-| ------------- | ---------------------------------------------- | ----------- | ---------------------------- |
-| `isValid()`   | Check if payload was parsed successfully       | `bool`      | `true`, `false`              |
-| `isPending()` | True if this is a pending payment message | `bool`      | `true`, `false`              |
-| `isSuccess()` | True if this is a payment success message | `bool`      | `true`, `false`              |
-| `isPostPaid()` | True for a postpaid order message | `bool` | `true`, `false` |
-| `isPrePaid()` | True for a prepaid pending or success message | `bool` | `true`, `false` |
-| `itemTitle()` | Menu item title                                | `String`    | e.g. `"Cappuccino"`          |
-| `price()`     | Price as string                                | `String`    | e.g. `"45000"`               |
-| `orderId()`   | Human-readable order ID                        | `String`    | e.g. `"ODR-260506-12345678"` |
-| `quantity()`  | Item quantity                                  | `int`       | e.g. `1`                     |
-| `metadata()`  | Raw JSON payload                               | `String`    | Full JSON string             |
+| Function       | Description                                   | Return Type | Possible Values              |
+| -------------- | --------------------------------------------- | ----------- | ---------------------------- |
+| `isValid()`    | Check if payload was parsed successfully      | `bool`      | `true`, `false`              |
+| `isPending()`  | True if this is a pending payment message     | `bool`      | `true`, `false`              |
+| `isSuccess()`  | True if this is a payment success message     | `bool`      | `true`, `false`              |
+| `isPostPaid()` | True for a postpaid order message             | `bool`      | `true`, `false`              |
+| `isPrePaid()`  | True for a prepaid pending or success message | `bool`      | `true`, `false`              |
+| `itemTitle()`  | Menu item title                               | `String`    | e.g. `"Cappuccino"`          |
+| `price()`      | Price as string                               | `String`    | e.g. `"45000"`               |
+| `orderId()`    | Human-readable order ID                       | `String`    | e.g. `"ODR-260506-12345678"` |
+| `quantity()`   | Item quantity                                 | `int`       | e.g. `1`                     |
+| `metadata()`   | Raw JSON payload                              | `String`    | Full JSON string             |
 
 ### Usages Object
 
@@ -643,12 +642,12 @@ ON_DISPENSES(d) {
 
 ### Dispenses Object
 
-| Function      | Description                              | Return Type | Possible Values                      |
-| ------------- | ---------------------------------------- | ----------- | ------------------------------------ |
-| `isValid()`   | Check if payload was parsed successfully | `bool`      | `true`, `false`                      |
-| `itemCount()` | Number of SKUs in the dispense payload | `int`       | e.g. `1`, `3`                        |
-| `skuAt(i)`    | SKU string at index `i`                  | `String`    | e.g. `"bohlam_Aj8"`                  |
-| `metadata()`  | Raw dispense payload                     | `String`    | Full payload string                  |
+| Function      | Description                              | Return Type | Possible Values     |
+| ------------- | ---------------------------------------- | ----------- | ------------------- |
+| `isValid()`   | Check if payload was parsed successfully | `bool`      | `true`, `false`     |
+| `itemCount()` | Number of SKUs in the dispense payload   | `int`       | e.g. `1`, `3`       |
+| `skuAt(i)`    | SKU string at index `i`                  | `String`    | e.g. `"bohlam_Aj8"` |
+| `metadata()`  | Raw dispense payload                     | `String`    | Full payload string |
 
 ### EntityCommand Object
 
@@ -688,7 +687,7 @@ ON_DISPENSES(d) {
 | `ON_ENTITIES(cmd)`                  | Global entity callback | `EntityCommand &`            | Macro body           | `ON_ENTITIES(cmd) { ... }`                                 |
 | `ON_VERIFICATIONS(v)`               | Verification flow      | `Verifications &`            | Macro body           | `ON_VERIFICATIONS(v) { ... }`                              |
 | `ON_PAYMENTS(p)`                    | Payment flow           | `Payments &`                 | Macro body           | `ON_PAYMENTS(p) { ... }`                                   |
-| `ON_DISPENSES(d)`                   | Vending dispense       | `Dispenses &`                | Macro body           | `ON_DISPENSES(d) { for (...) d.skuAt(i); }`                 |
+| `ON_DISPENSES(d)`                   | Vending dispense       | `Dispenses &`                | Macro body           | `ON_DISPENSES(d) { for (...) d.skuAt(i); }`                |
 | `ON_USAGES(u)`                      | Usage flow             | `Usages &`                   | Macro body           | `ON_USAGES(u) { ... }`                                     |
 | `ON_DEVICE_STATUS(ds)`              | Device status flow     | `DeviceStates &`             | Macro body           | `ON_DEVICE_STATUS(ds) { ... }`                             |
 | `ON_INIT(i)`                        | Init flow              | `Inits &`                    | Macro body           | `ON_INIT(i) { i.isVendingMode(); }`                        |
