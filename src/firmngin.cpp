@@ -292,6 +292,11 @@ String Firmngin::getPathPayment(String deviceId)
     return String("/c/") + deviceId + "/" + PATH_PAYMENT;
 }
 
+String Firmngin::getPathDispense(String deviceId)
+{
+    return String("/c/") + deviceId + "/" + PATH_DISPENSE;
+}
+
 String Firmngin::getPathDeviceStatus(String deviceId)
 {
     return String("/c/") + deviceId + "/" + PATH_DEVICE_STATUS;
@@ -721,6 +726,10 @@ void Firmngin::begin()
         {
             _paymentCallbacks.push_back(callback);
         }
+        for (const auto &callback : deferredDispenseRegistrations())
+        {
+            _dispenseCallbacks.push_back(callback);
+        }
         for (const auto &callback : deferredUsageRegistrations())
         {
             _usageCallbacks.push_back(callback);
@@ -835,6 +844,7 @@ static const char *STATE_NAMES[] = {
     "nl",   // NEAR_LIMIT
     "verif",// VERIFICATIONS
     "pay",  // PAYMENTS
+    "dp",   // DISPENSES
     "usg",  // USAGES
     "rs",   // ENTITIES
     "active_session", // ACTIVE_SESSION
@@ -855,6 +865,12 @@ void Firmngin::on(DeviceStateType state, PaymentCallbackFunction callback)
 {
     (void)state;
     _paymentsCallback = callback;
+}
+
+void Firmngin::on(DeviceStateType state, DispenseCallbackFunction callback)
+{
+    (void)state;
+    _dispenseCallback = callback;
 }
 
 // Verifications constructor: parses dpin or vr JSON automatically
@@ -920,6 +936,49 @@ Payments::Payments(const String &jsonPayload)
         _quantity = 1;
 
     _valid = _itemTitle.length() > 0 || _orderId.length() > 0;
+}
+
+Dispenses::Dispenses(const String &jsonPayload)
+{
+    _valid = false;
+    _count = 0;
+    _rawPayload = jsonPayload;
+
+    const char *p = jsonPayload.c_str();
+    const char *end = p + jsonPayload.length();
+    while (p < end && (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r'))
+        p++;
+    if (p >= end || *p != '[')
+        return;
+    p++;
+
+    char buf[128];
+    while (p < end && _count < FIRMNGIN_DISPENSE_MAX_ITEMS)
+    {
+        while (p < end && (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r' || *p == ','))
+            p++;
+        if (p >= end || *p == ']')
+            break;
+        size_t n = firmngin_json::_extractString(p, end, buf, sizeof(buf));
+        if (n == 0)
+            break;
+        _skus[_count++] = String(buf);
+        if (*p == '"')
+        {
+            p++;
+            while (p < end && *p != '"')
+            {
+                if (*p == '\\' && p + 1 < end)
+                    p += 2;
+                else
+                    p++;
+            }
+            if (p < end && *p == '"')
+                p++;
+        }
+    }
+
+    _valid = _count > 0;
 }
 
 void Firmngin::on(DeviceStateType state, UsageCallbackFunction callback)
@@ -992,6 +1051,9 @@ Inits::Inits(const String &jsonPayload)
     _merchantStatus = "";
     _activeOrderId = "";
     _verificationFlag = 0;
+    _modeFlag = 1;
+    _kioskFlag = 0;
+    _deviceLocalEndFlag = 0;
     _rawPayload = jsonPayload;
 
     firmngin_json::Parser p(jsonPayload.c_str(), jsonPayload.length());
@@ -1012,6 +1074,15 @@ Inits::Inits(const String &jsonPayload)
         _activeOrderId = String(buf);
     }
     _verificationFlag = p.getInt("vf", 0);
+    _modeFlag = p.getInt("md", 1);
+    if (_modeFlag != 2)
+        _modeFlag = 1;
+    _kioskFlag = p.getInt("ki", 0);
+    _deviceLocalEndFlag = p.getInt("dl", 0);
+    if (_modeFlag != 2) {
+        _kioskFlag = 0;
+        _deviceLocalEndFlag = 0;
+    }
 
     _valid = p.has("m");
 }
@@ -1188,6 +1259,8 @@ bool Firmngin::connectServer()
                 const int qosPayment = 1;
 
                 snprintf(topicBuf, sizeof(topicBuf), "/c/%s/pm", _deviceId);
+                _mqttClient.subscribe(topicBuf, qosPayment);
+                snprintf(topicBuf, sizeof(topicBuf), "/c/%s/dp", _deviceId);
                 _mqttClient.subscribe(topicBuf, qosPayment);
                 snprintf(topicBuf, sizeof(topicBuf), "/c/%s/pp", _deviceId);
                 _mqttClient.subscribe(topicBuf, qosPayment);
@@ -1569,6 +1642,25 @@ void Firmngin::mqttCallback(char *path, byte *payload, unsigned int length)
         if (p.isValid())
         {
             setCurrentOrder(p.orderId());
+        }
+    }
+
+    if (stateType == "dp" && (_dispenseCallback || !_dispenseCallbacks.empty()))
+    {
+        Dispenses d(payloadStr);
+        if (d.isValid())
+        {
+            if (_dispenseCallback)
+            {
+                _dispenseCallback(d);
+            }
+            for (const auto &callback : _dispenseCallbacks)
+            {
+                if (callback)
+                {
+                    callback(d);
+                }
+            }
         }
     }
 
