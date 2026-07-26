@@ -61,6 +61,17 @@ PubSubClient mqtt(net);
   library; older merged images cannot store the HTTPS Service CA.
 - Upload `.bin` as Master Fleet Firmware, then flash + provision each unit
 
+### BasicMonetizeExample
+- Payment callbacks (`PAYMENTS`) for pending / success / prepaid / postpaid
+- No entities required
+
+### VendingMachineExample
+- Serial-debug vending flow only (no entities, no GPIO)
+- `ON_INIT` prints service vs vending mode (`md`)
+- `ON_DISPENSES` prints SKU array from `/dp` after paid order
+- `ON_PAYMENTS` logs payment events for debugging
+- Requires device Business Mode = Vending
+
 ### ActiveSessionEndExample
 - Simple `ON_ACTIVE_SESSION` usage
 - Also available as `fngin.on(ON_ACTIVE_SESSION, [](ActiveSession &s){ ... });`

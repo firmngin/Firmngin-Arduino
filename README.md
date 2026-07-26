@@ -12,7 +12,8 @@ Check out [firmngin.dev](https://firmngin.dev) for more information.
 
 - **ESP8266 & ESP32** support
 - **Event-driven API** using `on()` callbacks: raw or typed
-- **Typed objects** for common flows: `Verifications`, `Payments`, `Usages`, `DeviceStates`, `Inits`, `EntityCommand`
+- **Typed objects** for common flows: `Verifications`, `Payments`, `Dispenses`, `Usages`, `DeviceStates`, `Inits`, `EntityCommand`
+- **Vending mode** — detect service vs vending and handle SKU dispense callbacks
 - **GPS Location** — builder-pattern API for sending coordinate updates
 - **Image Upload** — multipart image upload with HMAC-authenticated HTTP POST
 - **OTA Updates** — remote firmware download, SHA256 verification, and installation
@@ -107,8 +108,8 @@ Register handlers using the enum constants. Use `on(ENUM, callback)` for raw cal
 | `PENDING_PAYMENT`     | Invoice created, waiting for payment                        |
 | `POSTPAID_READY`      | Postpaid order is ready and active on the device             |
 | `METADATA_ON_PENDING` | Custom metadata for pending payments (raw JSON)             |
-| `METADATA_POSTPAID_READY` | Optional custom metadata paired with postpaid ready (`mpp`) |
-| `METADATA_ON_ACTIVE_SERVICE` | Custom metadata sent when the service becomes active (`moa`) |
+| `METADATA_POSTPAID_READY` | Optional custom metadata paired with postpaid ready |
+| `METADATA_ON_ACTIVE_SERVICE` | Custom metadata sent when the service becomes active |
 | `METADATA_ON_EXPIRED` | Custom metadata for expired payments (raw JSON)             |
 | `METADATA_ON_SUCCESS` | Custom metadata for successful payments (raw JSON)          |
 | `INIT`                | Initial configuration after connection                      |
@@ -360,7 +361,7 @@ fngin.on(VERIFICATIONS, [](Verifications &v) {
 
 ### Payment Flow
 
-Register **one callback** for the entire order/payment flow. The same `Payments` object handles prepaid pending (`pp`), payment success (`pm`), and postpaid ready (`pr`):
+Register **one callback** for the entire order/payment flow. The same `Payments` object handles prepaid pending, payment success, and postpaid ready:
 
 ```cpp
 fngin.on(PAYMENTS, [](Payments &p) {
@@ -387,7 +388,7 @@ fngin.on(PAYMENTS, [](Payments &p) {
 });
 ```
 
-Active-service metadata is a separate raw JSON event. It does not change the semantics of `pr`, `pp`, or `pm`:
+Active-service metadata is a separate raw JSON event. It does not change the semantics of pending, success, or postpaid payment events:
 
 ```cpp
 fngin.on(METADATA_ON_ACTIVE_SERVICE, [](DeviceState state) {
@@ -462,6 +463,13 @@ fngin.on(INIT, [](Inits &i) {
 
     Serial.print("Verification flag: "); Serial.println(i.verificationFlag());
 
+    if (i.isVendingMode()) {
+        Serial.println("Business mode: vending");
+    }
+    if (i.isServiceMode()) {
+        Serial.println("Business mode: service");
+    }
+
     if (i.isPinEnabled()) {
         Serial.println("PIN verification enabled");
     }
@@ -474,7 +482,37 @@ fngin.on(INIT, [](Inits &i) {
 });
 ```
 
-> The `Inits` object is automatically populated when an `init` message arrives. Use `entities()` to get the raw JSON array of GPIO entities. Use the boolean helpers to check merchant status and verification configuration.
+> The `Inits` object is automatically populated when the device receives its initial configuration. Use `entities()` to get the raw JSON array of GPIO entities. Use the boolean helpers to check merchant status, verification configuration, and business mode (service vs vending).
+
+### Vending Dispense Flow
+
+When the device business mode is **vending**, a successful prepaid payment delivers one or more catalog SKUs to dispense. Register **one callback** to receive typed `Dispenses`:
+
+```cpp
+fngin.on(DISPENSES, [](Dispenses &d) {
+    if (!d.isValid()) {
+        Serial.println("Invalid dispense payload");
+        return;
+    }
+    for (int i = 0; i < d.itemCount(); i++) {
+        Serial.print("Dispense SKU: ");
+        Serial.println(d.skuAt(i));
+        // drive motor / servo for d.skuAt(i)
+    }
+});
+```
+
+Or with the macro:
+
+```cpp
+ON_DISPENSES(d) {
+    for (int i = 0; i < d.itemCount(); i++) {
+        Serial.println(d.skuAt(i));
+    }
+}
+```
+
+> Each entry is a catalog SKU string. See `examples/VendingMachineExample`.
 
 ## API Reference
 
@@ -493,6 +531,7 @@ fngin.on(INIT, [](Inits &i) {
 | `on(STATE, callback)`                                          | Register a raw callback for any state                                                                         | `void`           | See enum constants                          |
 | `on(VERIFICATIONS, callback)`                                  | Register typed callback for dpin + vr                                                                         | `void`           | `Verifications &`                           |
 | `on(PAYMENTS, callback)`                                       | Register typed callback for pp + pm                                                                           | `void`           | `Payments &`                                |
+| `on(DISPENSES, callback)`                                      | Register typed callback for vending dispense SKUs                                                             | `void`           | `Dispenses &`                               |
 | `on(USAGES, callback)`                                         | Register typed callback for ur + le + nl                                                                      | `void`           | `Usages &`                                  |
 | `on(DEVICE_STATUS, callback)`                                  | Register typed callback for ds                                                                                | `void`           | `DeviceStates &`                            |
 | `on(INIT, callback)`                                           | Register typed callback for init                                                                              | `void`           | `Inits &`                                   |
@@ -540,10 +579,10 @@ fngin.on(INIT, [](Inits &i) {
 | Function      | Description                                    | Return Type | Possible Values              |
 | ------------- | ---------------------------------------------- | ----------- | ---------------------------- |
 | `isValid()`   | Check if payload was parsed successfully       | `bool`      | `true`, `false`              |
-| `isPending()` | True if this is a pp (pending payment) message | `bool`      | `true`, `false`              |
-| `isSuccess()` | True if this is a pm (payment success) message | `bool`      | `true`, `false`              |
-| `isPostPaid()` | True for a `pr` postpaid order message | `bool` | `true`, `false` |
-| `isPrePaid()` | True for a `pp` or `pm` prepaid order message | `bool` | `true`, `false` |
+| `isPending()` | True if this is a pending payment message | `bool`      | `true`, `false`              |
+| `isSuccess()` | True if this is a payment success message | `bool`      | `true`, `false`              |
+| `isPostPaid()` | True for a postpaid order message | `bool` | `true`, `false` |
+| `isPrePaid()` | True for a prepaid pending or success message | `bool` | `true`, `false` |
 | `itemTitle()` | Menu item title                                | `String`    | e.g. `"Cappuccino"`          |
 | `price()`     | Price as string                                | `String`    | e.g. `"45000"`               |
 | `orderId()`   | Human-readable order ID                        | `String`    | e.g. `"ODR-260506-12345678"` |
@@ -598,7 +637,18 @@ fngin.on(INIT, [](Inits &i) {
 | `isPinEnabled()`           | PIN verification is enabled              | `bool`      | `true`, `false`                                                                                                 |
 | `isPreconditionEnabled()`  | Precondition verification is enabled     | `bool`      | `true`, `false`                                                                                                 |
 | `isVerificationRequired()` | Some form of verification is required    | `bool`      | `true`, `false`                                                                                                 |
+| `isServiceMode()`          | Business mode is service                 | `bool`      | `true`, `false`                                                                                                 |
+| `isVendingMode()`          | Business mode is vending                 | `bool`      | `true`, `false`                                                                                                 |
 | `metadata()`               | Raw JSON payload                         | `String`    | Full JSON string                                                                                                |
+
+### Dispenses Object
+
+| Function      | Description                              | Return Type | Possible Values                      |
+| ------------- | ---------------------------------------- | ----------- | ------------------------------------ |
+| `isValid()`   | Check if payload was parsed successfully | `bool`      | `true`, `false`                      |
+| `itemCount()` | Number of SKUs in the dispense payload | `int`       | e.g. `1`, `3`                        |
+| `skuAt(i)`    | SKU string at index `i`                  | `String`    | e.g. `"bohlam_Aj8"`                  |
+| `metadata()`  | Raw dispense payload                     | `String`    | Full payload string                  |
 
 ### EntityCommand Object
 
@@ -638,9 +688,10 @@ fngin.on(INIT, [](Inits &i) {
 | `ON_ENTITIES(cmd)`                  | Global entity callback | `EntityCommand &`            | Macro body           | `ON_ENTITIES(cmd) { ... }`                                 |
 | `ON_VERIFICATIONS(v)`               | Verification flow      | `Verifications &`            | Macro body           | `ON_VERIFICATIONS(v) { ... }`                              |
 | `ON_PAYMENTS(p)`                    | Payment flow           | `Payments &`                 | Macro body           | `ON_PAYMENTS(p) { ... }`                                   |
+| `ON_DISPENSES(d)`                   | Vending dispense       | `Dispenses &`                | Macro body           | `ON_DISPENSES(d) { for (...) d.skuAt(i); }`                 |
 | `ON_USAGES(u)`                      | Usage flow             | `Usages &`                   | Macro body           | `ON_USAGES(u) { ... }`                                     |
 | `ON_DEVICE_STATUS(ds)`              | Device status flow     | `DeviceStates &`             | Macro body           | `ON_DEVICE_STATUS(ds) { ... }`                             |
-| `ON_INIT(i)`                        | Init flow              | `Inits &`                    | Macro body           | `ON_INIT(i) { ... }`                                       |
+| `ON_INIT(i)`                        | Init flow              | `Inits &`                    | Macro body           | `ON_INIT(i) { i.isVendingMode(); }`                        |
 | `ON_OTA_STATUS(status, message)`    | OTA status             | `const char *, const char *` | Macro body           | `ON_OTA_STATUS(status, message) { ... }`                   |
 | `ON_ACTIVE_SESSION(s)`              | Active session         | `ActiveSession &`            | Macro body           | `ON_ACTIVE_SESSION(s) { ... }`                             |
 

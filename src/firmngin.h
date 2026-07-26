@@ -152,6 +152,7 @@
 #define PATH_DEVICE_STATUS "ds"
 #define PATH_PENDING_PAYMENT "pp"
 #define PATH_POSTPAID_READY "pr"
+#define PATH_DISPENSE "dp"
 #define PATH_METADATA_ON_PENDING "mop"
 #define PATH_METADATA_POSTPAID_READY "mpp"
 #define PATH_METADATA_ON_ACTIVE_SERVICE "moa"
@@ -180,6 +181,7 @@ enum DeviceStateType
     NEAR_LIMIT,
     VERIFICATIONS,
     PAYMENTS,
+    DISPENSES,
     USAGES,
     ENTITIES,
     ACTIVE_SESSION,
@@ -270,6 +272,34 @@ public:
     void setPaymentType(bool postPaid) { _isPostPaid = postPaid; _isPrePaid = !postPaid; }
 };
 
+#ifndef FIRMNGIN_DISPENSE_MAX_ITEMS
+#define FIRMNGIN_DISPENSE_MAX_ITEMS 20
+#endif
+
+// Typed payload for vending dispense: root JSON array of SKU strings
+class Dispenses
+{
+private:
+    String _skus[FIRMNGIN_DISPENSE_MAX_ITEMS];
+    int _count;
+    bool _valid;
+    String _rawPayload;
+
+public:
+    Dispenses() : _count(0), _valid(false) {}
+    Dispenses(const String &jsonPayload);
+
+    bool isValid() const { return _valid; }
+    int itemCount() const { return _count; }
+    String skuAt(int index) const
+    {
+        if (index < 0 || index >= _count)
+            return "";
+        return _skus[index];
+    }
+    String metadata() const { return _rawPayload; }
+};
+
 // Typed payload for usage flow
 class Usages
 {
@@ -337,11 +367,14 @@ private:
     String _merchantStatus;
     String _activeOrderId;
     int _verificationFlag;
+    int _modeFlag;
+    int _kioskFlag;
+    int _deviceLocalEndFlag;
     bool _valid;
     String _rawPayload;
 
 public:
-    Inits() : _entitiesJson(""), _merchantStatus(""), _activeOrderId(""), _verificationFlag(0), _valid(false) {}
+    Inits() : _entitiesJson(""), _merchantStatus(""), _activeOrderId(""), _verificationFlag(0), _modeFlag(1), _kioskFlag(0), _deviceLocalEndFlag(0), _valid(false) {}
     Inits(const String &jsonPayload);
 
     bool isValid() const { return _valid; }
@@ -361,6 +394,10 @@ public:
     bool isPinEnabled() const { return _verificationFlag == 1 || _verificationFlag == 3; }
     bool isPreconditionEnabled() const { return _verificationFlag == 2 || _verificationFlag == 3; }
     bool isVerificationRequired() const { return _verificationFlag > 0; }
+    bool isServiceMode() const { return _modeFlag != 2; }
+    bool isVendingMode() const { return _modeFlag == 2; }
+    bool isKiosk() const { return _kioskFlag == 1; }
+    bool isDeviceLocalEndEnabled() const { return _kioskFlag == 1 && _deviceLocalEndFlag == 1; }
 };
 
 class EntityCommand
@@ -388,6 +425,7 @@ class ActiveSession;
 typedef std::function<void(DeviceState)> StateCallbackFunction;
 typedef std::function<void(Verifications &)> VerificationCallbackFunction;
 typedef std::function<void(Payments &)> PaymentCallbackFunction;
+typedef std::function<void(Dispenses &)> DispenseCallbackFunction;
 typedef std::function<void(Usages &)> UsageCallbackFunction;
 typedef std::function<void(DeviceStates &)> DeviceStateCallbackFunction;
 typedef std::function<void(Inits &)> InitCallbackFunction;
@@ -482,6 +520,12 @@ inline std::vector<PaymentCallbackFunction> &deferredPaymentRegistrations()
     return registrations;
 }
 
+inline std::vector<DispenseCallbackFunction> &deferredDispenseRegistrations()
+{
+    static std::vector<DispenseCallbackFunction> registrations;
+    return registrations;
+}
+
 inline std::vector<UsageCallbackFunction> &deferredUsageRegistrations()
 {
     static std::vector<UsageCallbackFunction> registrations;
@@ -569,6 +613,13 @@ inline std::vector<OTACallbackFunction> &deferredOTAStatusRegistrations()
         deferredPaymentRegistrations().push_back(FNGIN_CONCAT(_fngin_payment_handler_, __LINE__)); \
         return true; })(); \
     static void FNGIN_CONCAT(_fngin_payment_handler_, __LINE__)(Payments &paymentVar)
+
+#define ON_DISPENSES(dispenseVar) \
+    static void FNGIN_CONCAT(_fngin_dispense_handler_, __LINE__)(Dispenses &dispenseVar); \
+    static const bool FNGIN_CONCAT(_fngin_dispense_reg_, __LINE__) = ([]() { \
+        deferredDispenseRegistrations().push_back(FNGIN_CONCAT(_fngin_dispense_handler_, __LINE__)); \
+        return true; })(); \
+    static void FNGIN_CONCAT(_fngin_dispense_handler_, __LINE__)(Dispenses &dispenseVar)
 
 #define ON_USAGES(usageVar) \
     static void FNGIN_CONCAT(_fngin_usage_handler_, __LINE__)(Usages &usageVar); \
@@ -792,6 +843,7 @@ public:
     void on(DeviceStateType state, StateCallbackFunction callback);
     void on(DeviceStateType state, VerificationCallbackFunction callback);
     void on(DeviceStateType state, PaymentCallbackFunction callback);
+    void on(DeviceStateType state, DispenseCallbackFunction callback);
     void on(DeviceStateType state, UsageCallbackFunction callback);
     void on(DeviceStateType state, DeviceStateCallbackFunction callback);
     void on(DeviceStateType state, InitCallbackFunction callback);
@@ -950,12 +1002,14 @@ private:
     std::map<String, StateCallbackFunction> _callbacks;
     VerificationCallbackFunction _verificationCallback;
     PaymentCallbackFunction _paymentsCallback;
+    DispenseCallbackFunction _dispenseCallback;
     UsageCallbackFunction _usagesCallback;
     DeviceStateCallbackFunction _deviceStateCallback;
     InitCallbackFunction _initCallback;
     EntityCommandCallbackFunction _entityCallback;
     std::vector<VerificationCallbackFunction> _verificationCallbacks;
     std::vector<PaymentCallbackFunction> _paymentCallbacks;
+    std::vector<DispenseCallbackFunction> _dispenseCallbacks;
     std::vector<UsageCallbackFunction> _usageCallbacks;
     std::vector<DeviceStateCallbackFunction> _deviceStateCallbacks;
     std::vector<InitCallbackFunction> _initCallbacks;
@@ -977,6 +1031,7 @@ private:
     void _stopMqttTransport();
     void mqttCallback(char *path, byte *payload, unsigned int length);
     String getPathPayment(String deviceId);
+    String getPathDispense(String deviceId);
     String getPathDeviceStatus(String deviceId);
     String getPathPendingPayment(String deviceId);
     String getPathPostpaidReady(String deviceId);
