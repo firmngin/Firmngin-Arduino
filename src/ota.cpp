@@ -148,6 +148,7 @@ bool Firmngin::checkOTA()
     String newVer = body.substring(verStart, body.indexOf("\"", verStart));
     shaStart += 10;
     _otaFirmwareSHA256 = body.substring(shaStart, body.indexOf("\"", shaStart));
+    _otaFirmwareVersion = newVer;
 
     char msg[128];
     snprintf(msg, sizeof(msg), "Update available: %s", newVer.c_str());
@@ -524,6 +525,11 @@ void Firmngin::_processOTA()
             _otaFirmwareID = "";
             return;
         }
+
+        // New firmware will boot as pending verification: enable boot-rollback tracking.
+        _otaRollbackPending = true;
+        _otaRollbackBootCount = 0;
+        _persistOtaRollbackState();
 
         publishOTAStatus("installing", "Finalizing firmware install");
         publishOTAStatus("installed", "Firmware installed");

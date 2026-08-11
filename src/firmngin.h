@@ -11,10 +11,15 @@
 #define FIRMNGIN_VERSION "0.0.0"
 #endif
 #include "json.h"
+#include "ota_rollback.h"
 #include <time.h>
 #include <map>
 #include <vector>
 #include <functional>
+
+#if defined(ESP32)
+#include <Preferences.h>
+#endif
 
 #if defined(ESP32)
 #include <mbedtls/gcm.h>
@@ -965,6 +970,21 @@ private:
     String _otaBaseUrl = FIRMNGIN_OTA_BASE_URL;
     String _otaFirmwareID;
     String _otaFirmwareSHA256;
+    String _otaFirmwareVersion;
+
+    // OTA boot rollback tracking (NVS via Preferences)
+    bool _otaRollbackReady = false;
+    bool _otaRollbackPending = false;
+    int _otaRollbackBootCount = 0;
+    String _otaLastOkVersion;
+    bool _otaRollbackMarkedThisBoot = false;
+    bool _otaRollbackReportPublished = false;
+    unsigned long _otaBootStartMs = 0;
+    String _otaBootReportStatus;
+    String _otaBootReportMessage;
+#if defined(ESP32)
+    Preferences _otaPrefs;
+#endif
 
     OTAAsyncState _otaAsyncState = OTA_ASYNC_IDLE;
     HTTPClient _otaHttp;
@@ -1073,6 +1093,9 @@ private:
     void _resetQueueFile();
     void _processOTA();
     void _otaCleanup();
+    void _otaRollbackSetup();
+    void _otaRollbackLoop();
+    void _persistOtaRollbackState();
     void runActiveSessionHandlers();
     void setMerchantStatus(const String &status);
     void setCurrentOrder(const String &orderId);

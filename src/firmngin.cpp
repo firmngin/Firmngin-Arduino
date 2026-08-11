@@ -13,8 +13,23 @@ extern "C"
 
 #if defined(ESP32)
 #include <Update.h>
+#include <esp_ota_ops.h>
 #elif defined(ESP8266)
 #include <Updater.h>
+#include <EEPROM.h>
+#endif
+
+// OTA rollback persistent state: Preferences (ESP32) / EEPROM struct (ESP8266)
+#if defined(ESP8266)
+#define OTA_RB_NVS_SIZE 64
+#define OTA_RB_NVS_MAGIC 0xA5
+struct OtaRbNvs
+{
+    char last_ok[48];
+    uint8_t pending;
+    uint8_t boot_cnt;
+    uint8_t magic;
+};
 #endif
 
 const char *NTP_SERVER = "pool.ntp.org";
@@ -432,6 +447,8 @@ void Firmngin::begin()
 
     if (!PLATFORM_SUPPORTED)
         return;
+
+    _otaRollbackSetup();
 
     FirmnginIdentityRecord flashIdentity;
     const bool firmwareIdentityConfigured = validateDeviceCredentials(_deviceId, _deviceKey);
@@ -1154,6 +1171,8 @@ void Firmngin::loop()
     if (!PLATFORM_SUPPORTED || !_securityReady || WiFi.status() != WL_CONNECTED)
         return;
 
+    _otaRollbackLoop();
+
     if (_ntpSyncStartMs > 0 && !_ntpSynced)
     {
         time_t now = time(nullptr);
@@ -1190,6 +1209,125 @@ void Firmngin::loop()
 
     _processOTA();
     runActiveSessionHandlers();
+}
+
+void Firmngin::_otaRollbackSetup()
+{
+    _otaBootStartMs = millis();
+#if defined(ESP32)
+    _otaPrefs.begin("fngin_ota", false);
+    _otaRollbackReady = true;
+    _otaLastOkVersion = _otaPrefs.getString("last_ok", "");
+    _otaRollbackPending = _otaPrefs.getBool("pending", false);
+    _otaRollbackBootCount = _otaPrefs.getUChar("boot_cnt", 0);
+#elif defined(ESP8266)
+    EEPROM.begin(OTA_RB_NVS_SIZE);
+    _otaRollbackReady = true;
+    OtaRbNvs nvs;
+    EEPROM.get(0, nvs);
+    if (nvs.magic == OTA_RB_NVS_MAGIC)
+    {
+        _otaLastOkVersion = String(nvs.last_ok);
+        _otaRollbackPending = (nvs.pending != 0);
+        _otaRollbackBootCount = nvs.boot_cnt;
+    }
+#endif
+
+    OtaRollbackState st;
+    st.lastOkVersion = _otaLastOkVersion.c_str();
+    st.pending = _otaRollbackPending;
+    st.bootCount = _otaRollbackBootCount;
+
+    OtaRollbackResult res = firmngin_ota_rollback_decide(_firmwareVersion.c_str(), st, 0);
+    _otaRollbackBootCount = res.nextBootCount;
+    if (res.clearPending)
+        _otaRollbackPending = false;
+    if (res.setLastOk)
+        _otaLastOkVersion = _firmwareVersion;
+    _persistOtaRollbackState();
+
+    switch (res.action)
+    {
+    case OTA_RB_REPORT_ROLLED_BACK:
+        _otaBootReportStatus = "rolled_back";
+        _otaBootReportMessage = "Reverted to " + _firmwareVersion;
+        break;
+    case OTA_RB_REPORT_BOOT_FAILED:
+        _otaBootReportStatus = "boot_failed";
+        _otaBootReportMessage = "Firmware failed to boot " + String(OTA_ROLLBACK_MAX_BOOTS) + " times";
+        break;
+    default:
+        break;
+    }
+}
+
+void Firmngin::_otaRollbackLoop()
+{
+#if defined(ESP8266) || defined(ESP32)
+    if (!_otaRollbackReady)
+        return;
+
+    // Publish the deferred boot report (rollback / boot failure) once the network is up.
+    if (_otaBootReportStatus.length() > 0 && !_otaRollbackReportPublished &&
+        _mqttClient.connected())
+    {
+        publishOTAStatus(_otaBootReportStatus.c_str(), _otaBootReportMessage.c_str());
+        _otaRollbackReportPublished = true;
+    }
+
+    // Mark the running firmware valid once it has been stable for the grace period.
+    if (_otaRollbackPending && !_otaRollbackMarkedThisBoot &&
+        millis() - _otaBootStartMs >= OTA_ROLLBACK_BOOT_OK_MS)
+    {
+        OtaRollbackState st;
+        st.lastOkVersion = _otaLastOkVersion.c_str();
+        st.pending = _otaRollbackPending;
+        st.bootCount = _otaRollbackBootCount;
+
+        OtaRollbackResult res = firmngin_ota_rollback_decide(_firmwareVersion.c_str(), st, millis() - _otaBootStartMs);
+        if (res.action == OTA_RB_MARK_VALID)
+        {
+#if defined(ESP32)
+            esp_ota_mark_app_valid_cancel_rollback();
+#endif
+            _otaRollbackPending = false;
+            _otaLastOkVersion = _firmwareVersion;
+            _otaRollbackBootCount = 0;
+            _persistOtaRollbackState();
+            _otaRollbackMarkedThisBoot = true;
+            _Debug("OTA rollback: running firmware marked valid");
+        }
+    }
+#endif
+}
+
+void Firmngin::_persistOtaRollbackState()
+{
+#if defined(ESP32)
+    if (!_otaRollbackReady)
+    {
+        _otaPrefs.begin("fngin_ota", false);
+        _otaRollbackReady = true;
+    }
+    _otaPrefs.putString("last_ok", _otaLastOkVersion);
+    _otaPrefs.putBool("pending", _otaRollbackPending);
+    _otaPrefs.putUChar("boot_cnt", (uint8_t)_otaRollbackBootCount);
+#elif defined(ESP8266)
+    if (!_otaRollbackReady)
+    {
+        EEPROM.begin(OTA_RB_NVS_SIZE);
+        _otaRollbackReady = true;
+    }
+    OtaRbNvs nvs;
+    memset(&nvs, 0, sizeof(nvs));
+    nvs.magic = OTA_RB_NVS_MAGIC;
+    strncpy(nvs.last_ok, _otaLastOkVersion.c_str(), sizeof(nvs.last_ok) - 1);
+    nvs.last_ok[sizeof(nvs.last_ok) - 1] = '\0';
+    nvs.pending = _otaRollbackPending ? 1 : 0;
+    nvs.boot_cnt = (uint8_t)_otaRollbackBootCount;
+    EEPROM.put(0, nvs);
+    EEPROM.commit();
+#endif
 }
 
 void Firmngin::_Debug(String message, bool newLine)
