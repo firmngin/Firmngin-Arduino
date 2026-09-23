@@ -72,6 +72,8 @@ SOURCE_FILES=(
     "ota.cpp"
     "ota_progress.h"
     "ota_progress.cpp"
+    "ota_rollback.h"
+    "ota_rollback.cpp"
     "queue.cpp"
     "queue_format.h"
     "queue_format.cpp"

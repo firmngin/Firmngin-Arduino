@@ -14,3 +14,4 @@ releases/
 # Local Pi runtime state
 .atl/
 .pi/
+.pi-subagents/
