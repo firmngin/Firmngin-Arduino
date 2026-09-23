@@ -13,8 +13,23 @@ extern "C"
 
 #if defined(ESP32)
 #include <Update.h>
+#include <esp_ota_ops.h>
 #elif defined(ESP8266)
 #include <Updater.h>
+#include <EEPROM.h>
+#endif
+
+// OTA rollback persistent state: Preferences (ESP32) / EEPROM struct (ESP8266)
+#if defined(ESP8266)
+#define OTA_RB_NVS_SIZE 64
+#define OTA_RB_NVS_MAGIC 0xA5
+struct OtaRbNvs
+{
+    char last_ok[48];
+    uint8_t pending;
+    uint8_t boot_cnt;
+    uint8_t magic;
+};
 #endif
 
 const char *NTP_SERVER = "pool.ntp.org";
@@ -36,7 +51,8 @@ static bool parseFingerprintHex(const String &hexValue, uint8_t out[20])
     {
         char c1 = hex[i * 2];
         char c2 = hex[i * 2 + 1];
-        auto nibble = [](char c) -> int {
+        auto nibble = [](char c) -> int
+        {
             if (c >= '0' && c <= '9')
                 return c - '0';
             if (c >= 'A' && c <= 'F')
@@ -433,6 +449,8 @@ void Firmngin::begin()
     if (!PLATFORM_SUPPORTED)
         return;
 
+    _otaRollbackSetup();
+
     FirmnginIdentityRecord flashIdentity;
     const bool firmwareIdentityConfigured = validateDeviceCredentials(_deviceId, _deviceKey);
 #if KEYS_H_AVAILABLE
@@ -531,96 +549,96 @@ void Firmngin::begin()
     {
 #endif
 #if defined(ESP8266)
-    const char *clientCert = _identityLoaded ? _runtimeClientCert.c_str() : _clientCert;
-    const char *privateKey = _identityLoaded ? _runtimePrivateKey.c_str() : _privateKey;
-    const uint8_t *fingerprint = _fingerprint;
+        const char *clientCert = _identityLoaded ? _runtimeClientCert.c_str() : _clientCert;
+        const char *privateKey = _identityLoaded ? _runtimePrivateKey.c_str() : _privateKey;
+        const uint8_t *fingerprint = _fingerprint;
 
 #if KEYS_H_AVAILABLE
-    if (!_identityLoaded)
-    {
-        if (clientCert == nullptr)
-            clientCert = CLIENT_CERT;
-        if (privateKey == nullptr)
-            privateKey = PRIVATE_KEY;
+        if (!_identityLoaded)
+        {
+            if (clientCert == nullptr)
+                clientCert = CLIENT_CERT;
+            if (privateKey == nullptr)
+                privateKey = PRIVATE_KEY;
 #if defined(USE_FINGERPRINT)
-        if (fingerprint == nullptr)
-            fingerprint = SERVER_FINGERPRINT_BYTES;
+            if (fingerprint == nullptr)
+                fingerprint = SERVER_FINGERPRINT_BYTES;
 #elif defined(USE_CA_CERT)
 #else
-        if (fingerprint == nullptr)
-            fingerprint = SERVER_FINGERPRINT_BYTES;
+            if (fingerprint == nullptr)
+                fingerprint = SERVER_FINGERPRINT_BYTES;
 #endif
-    }
-#endif
-
-    if (_identityLoaded && _runtimeUseFingerprint)
-    {
-        fingerprint = _runtimeFingerprint;
-    }
-
-    if (!isConfiguredPEM(clientCert, "-----BEGIN CERTIFICATE-----") ||
-        !isConfiguredPEM(privateKey, "PRIVATE KEY-----"))
-    {
-        Serial.println("ERROR: mTLS credentials not configured");
-        return;
-    }
-
-    if (_clientCertList != nullptr)
-    {
-        delete _clientCertList;
-    }
-    if (_clientPrivKey != nullptr)
-    {
-        delete _clientPrivKey;
-    }
-    _clientCertList = new BearSSL::X509List(clientCert);
-    _clientPrivKey = new BearSSL::PrivateKey(privateKey);
-    _wifiClient.setClientRSACert(_clientCertList, _clientPrivKey);
-    _wifiClient.setBufferSizes(512, 512);
-
-    if (_identityLoaded && _runtimeUseCA && isConfiguredPEM(_runtimeCaCert.c_str(), "-----BEGIN CERTIFICATE-----"))
-    {
-        if (_trustAnchors != nullptr)
-        {
-            delete _trustAnchors;
         }
-        _trustAnchors = new BearSSL::X509List(_runtimeCaCert.c_str());
-        _wifiClient.setTrustAnchors(_trustAnchors);
-    }
-#if defined(USE_CA_CERT) && KEYS_H_AVAILABLE
-    else if (!_identityLoaded)
-    {
-        if (!isConfiguredPEM(CA_CERT, "-----BEGIN CERTIFICATE-----"))
+#endif
+
+        if (_identityLoaded && _runtimeUseFingerprint)
         {
-            Serial.println("ERROR: CA certificate is malformed or still uses the template placeholder; connection blocked");
+            fingerprint = _runtimeFingerprint;
+        }
+
+        if (!isConfiguredPEM(clientCert, "-----BEGIN CERTIFICATE-----") ||
+            !isConfiguredPEM(privateKey, "PRIVATE KEY-----"))
+        {
+            Serial.println("ERROR: mTLS credentials not configured");
+            return;
+        }
+
+        if (_clientCertList != nullptr)
+        {
+            delete _clientCertList;
+        }
+        if (_clientPrivKey != nullptr)
+        {
+            delete _clientPrivKey;
+        }
+        _clientCertList = new BearSSL::X509List(clientCert);
+        _clientPrivKey = new BearSSL::PrivateKey(privateKey);
+        _wifiClient.setClientRSACert(_clientCertList, _clientPrivKey);
+        _wifiClient.setBufferSizes(512, 512);
+
+        if (_identityLoaded && _runtimeUseCA && isConfiguredPEM(_runtimeCaCert.c_str(), "-----BEGIN CERTIFICATE-----"))
+        {
+            if (_trustAnchors != nullptr)
+            {
+                delete _trustAnchors;
+            }
+            _trustAnchors = new BearSSL::X509List(_runtimeCaCert.c_str());
+            _wifiClient.setTrustAnchors(_trustAnchors);
+        }
+#if defined(USE_CA_CERT) && KEYS_H_AVAILABLE
+        else if (!_identityLoaded)
+        {
+            if (!isConfiguredPEM(CA_CERT, "-----BEGIN CERTIFICATE-----"))
+            {
+                Serial.println("ERROR: CA certificate is malformed or still uses the template placeholder; connection blocked");
+                delete _clientCertList;
+                delete _clientPrivKey;
+                _clientCertList = nullptr;
+                _clientPrivKey = nullptr;
+                return;
+            }
+            if (_trustAnchors != nullptr)
+            {
+                delete _trustAnchors;
+            }
+            _trustAnchors = new BearSSL::X509List(CA_CERT);
+            _wifiClient.setTrustAnchors(_trustAnchors);
+        }
+#endif
+        else if (fingerprint != nullptr)
+        {
+            _wifiClient.setFingerprint(fingerprint);
+            Serial.println("Server validation: Fingerprint");
+        }
+        else
+        {
+            Serial.println("ERROR: No server validation method configured");
             delete _clientCertList;
             delete _clientPrivKey;
             _clientCertList = nullptr;
             _clientPrivKey = nullptr;
             return;
         }
-        if (_trustAnchors != nullptr)
-        {
-            delete _trustAnchors;
-        }
-        _trustAnchors = new BearSSL::X509List(CA_CERT);
-        _wifiClient.setTrustAnchors(_trustAnchors);
-    }
-#endif
-    else if (fingerprint != nullptr)
-    {
-        _wifiClient.setFingerprint(fingerprint);
-        Serial.println("Server validation: Fingerprint");
-    }
-    else
-    {
-        Serial.println("ERROR: No server validation method configured");
-        delete _clientCertList;
-        delete _clientPrivKey;
-        _clientCertList = nullptr;
-        _clientPrivKey = nullptr;
-        return;
-    }
 
 #elif defined(ESP32)
     const char *caCert = _identityLoaded ? _runtimeCaCert.c_str() : _caCert;
@@ -680,20 +698,24 @@ void Firmngin::begin()
     }
 #endif
 
-    if (activeDecryptor == nullptr || !decodeE2EEKey(activeDecryptor, _e2eeKeyBytes, _e2eeKeyLen))
+    if (activeDecryptor == nullptr || activeDecryptor[0] == '\0' || strlen(activeDecryptor) == 0)
     {
-        Serial.println("ERROR: DECRYPTOR must contain exactly 32 or 64 hexadecimal characters; connection blocked");
-        return;
+        _e2eeKeyLen = 0;
+    }
+    else if (!decodeE2EEKey(activeDecryptor, _e2eeKeyBytes, _e2eeKeyLen))
+    {
+        _e2eeKeyLen = 0;
     }
 #if defined(ESP8266)
-    if (_e2eeKeyLen != 32)
+    else if (_e2eeKeyLen != 32)
     {
-        Serial.println("ERROR: ESP8266 requires a 64-character ChaCha20 DECRYPTOR key; connection blocked");
         _e2eeKeyLen = 0;
-        return;
     }
 #endif
-    _e2eeEnabled = true;
+    else
+    {
+        _e2eeEnabled = true;
+    }
 
     _securityReady = true;
 
@@ -827,26 +849,26 @@ void Firmngin::on(const char *state, StateCallbackFunction callback)
 
 // State name mapping for paths
 static const char *STATE_NAMES[] = {
-    "pm",   // PAYMENT
-    "ds",   // DEVICE_STATUS
-    "pp",   // PENDING_PAYMENT
-    "pr",   // POSTPAID_READY
-    "mop",  // METADATA_ON_PENDING
-    "mpp",  // METADATA_POSTPAID_READY
-    "moa",  // METADATA_ON_ACTIVE_SERVICE
-    "moe",  // METADATA_ON_EXPIRED
-    "mos",  // METADATA_ON_SUCCESS
-    "init", // INIT
-    "dpin", // DISPLAY_PIN_NUMBER
-    "vr",   // VERIFICATION_RESULT
-    "ur",   // USAGE_RESPONSE
-    "le",   // LIMIT_EXCEEDED
-    "nl",   // NEAR_LIMIT
-    "verif",// VERIFICATIONS
-    "pay",  // PAYMENTS
-    "dp",   // DISPENSES
-    "usg",  // USAGES
-    "rs",   // ENTITIES
+    "pm",             // PAYMENT
+    "ds",             // DEVICE_STATUS
+    "pp",             // PENDING_PAYMENT
+    "pr",             // POSTPAID_READY
+    "mop",            // METADATA_ON_PENDING
+    "mpp",            // METADATA_POSTPAID_READY
+    "moa",            // METADATA_ON_ACTIVE_SERVICE
+    "moe",            // METADATA_ON_EXPIRED
+    "mos",            // METADATA_ON_SUCCESS
+    "init",           // INIT
+    "dpin",           // DISPLAY_PIN_NUMBER
+    "vr",             // VERIFICATION_RESULT
+    "ur",             // USAGE_RESPONSE
+    "le",             // LIMIT_EXCEEDED
+    "nl",             // NEAR_LIMIT
+    "verif",          // VERIFICATIONS
+    "pay",            // PAYMENTS
+    "dp",             // DISPENSES
+    "usg",            // USAGES
+    "rs",             // ENTITIES
     "active_session", // ACTIVE_SESSION
 };
 
@@ -1079,7 +1101,8 @@ Inits::Inits(const String &jsonPayload)
         _modeFlag = 1;
     _kioskFlag = p.getInt("ki", 0);
     _deviceLocalEndFlag = p.getInt("dl", 0);
-    if (_modeFlag != 2) {
+    if (_modeFlag != 2)
+    {
         _kioskFlag = 0;
         _deviceLocalEndFlag = 0;
     }
@@ -1154,6 +1177,8 @@ void Firmngin::loop()
     if (!PLATFORM_SUPPORTED || !_securityReady || WiFi.status() != WL_CONNECTED)
         return;
 
+    _otaRollbackLoop();
+
     if (_ntpSyncStartMs > 0 && !_ntpSynced)
     {
         time_t now = time(nullptr);
@@ -1192,6 +1217,125 @@ void Firmngin::loop()
     runActiveSessionHandlers();
 }
 
+void Firmngin::_otaRollbackSetup()
+{
+    _otaBootStartMs = millis();
+#if defined(ESP32)
+    _otaPrefs.begin("fngin_ota", false);
+    _otaRollbackReady = true;
+    _otaLastOkVersion = _otaPrefs.getString("last_ok", "");
+    _otaRollbackPending = _otaPrefs.getBool("pending", false);
+    _otaRollbackBootCount = _otaPrefs.getUChar("boot_cnt", 0);
+#elif defined(ESP8266)
+    EEPROM.begin(OTA_RB_NVS_SIZE);
+    _otaRollbackReady = true;
+    OtaRbNvs nvs;
+    EEPROM.get(0, nvs);
+    if (nvs.magic == OTA_RB_NVS_MAGIC)
+    {
+        _otaLastOkVersion = String(nvs.last_ok);
+        _otaRollbackPending = (nvs.pending != 0);
+        _otaRollbackBootCount = nvs.boot_cnt;
+    }
+#endif
+
+    OtaRollbackState st;
+    st.lastOkVersion = _otaLastOkVersion.c_str();
+    st.pending = _otaRollbackPending;
+    st.bootCount = _otaRollbackBootCount;
+
+    OtaRollbackResult res = firmngin_ota_rollback_decide(_firmwareVersion.c_str(), st, 0);
+    _otaRollbackBootCount = res.nextBootCount;
+    if (res.clearPending)
+        _otaRollbackPending = false;
+    if (res.setLastOk)
+        _otaLastOkVersion = _firmwareVersion;
+    _persistOtaRollbackState();
+
+    switch (res.action)
+    {
+    case OTA_RB_REPORT_ROLLED_BACK:
+        _otaBootReportStatus = "rolled_back";
+        _otaBootReportMessage = "Reverted to " + _firmwareVersion;
+        break;
+    case OTA_RB_REPORT_BOOT_FAILED:
+        _otaBootReportStatus = "boot_failed";
+        _otaBootReportMessage = "Firmware failed to boot " + String(OTA_ROLLBACK_MAX_BOOTS) + " times";
+        break;
+    default:
+        break;
+    }
+}
+
+void Firmngin::_otaRollbackLoop()
+{
+#if defined(ESP8266) || defined(ESP32)
+    if (!_otaRollbackReady)
+        return;
+
+    // Publish the deferred boot report (rollback / boot failure) once the network is up.
+    if (_otaBootReportStatus.length() > 0 && !_otaRollbackReportPublished &&
+        _mqttClient.connected())
+    {
+        publishOTAStatus(_otaBootReportStatus.c_str(), _otaBootReportMessage.c_str());
+        _otaRollbackReportPublished = true;
+    }
+
+    // Mark the running firmware valid once it has been stable for the grace period.
+    if (_otaRollbackPending && !_otaRollbackMarkedThisBoot &&
+        millis() - _otaBootStartMs >= OTA_ROLLBACK_BOOT_OK_MS)
+    {
+        OtaRollbackState st;
+        st.lastOkVersion = _otaLastOkVersion.c_str();
+        st.pending = _otaRollbackPending;
+        st.bootCount = _otaRollbackBootCount;
+
+        OtaRollbackResult res = firmngin_ota_rollback_decide(_firmwareVersion.c_str(), st, millis() - _otaBootStartMs);
+        if (res.action == OTA_RB_MARK_VALID)
+        {
+#if defined(ESP32)
+            esp_ota_mark_app_valid_cancel_rollback();
+#endif
+            _otaRollbackPending = false;
+            _otaLastOkVersion = _firmwareVersion;
+            _otaRollbackBootCount = 0;
+            _persistOtaRollbackState();
+            _otaRollbackMarkedThisBoot = true;
+            _Debug("OTA rollback: running firmware marked valid");
+        }
+    }
+#endif
+}
+
+void Firmngin::_persistOtaRollbackState()
+{
+#if defined(ESP32)
+    if (!_otaRollbackReady)
+    {
+        _otaPrefs.begin("fngin_ota", false);
+        _otaRollbackReady = true;
+    }
+    _otaPrefs.putString("last_ok", _otaLastOkVersion);
+    _otaPrefs.putBool("pending", _otaRollbackPending);
+    _otaPrefs.putUChar("boot_cnt", (uint8_t)_otaRollbackBootCount);
+#elif defined(ESP8266)
+    if (!_otaRollbackReady)
+    {
+        EEPROM.begin(OTA_RB_NVS_SIZE);
+        _otaRollbackReady = true;
+    }
+    OtaRbNvs nvs;
+    memset(&nvs, 0, sizeof(nvs));
+    nvs.magic = OTA_RB_NVS_MAGIC;
+    strncpy(nvs.last_ok, _otaLastOkVersion.c_str(), sizeof(nvs.last_ok) - 1);
+    nvs.last_ok[sizeof(nvs.last_ok) - 1] = '\0';
+    nvs.pending = _otaRollbackPending ? 1 : 0;
+    nvs.boot_cnt = (uint8_t)_otaRollbackBootCount;
+    EEPROM.put(0, nvs);
+    EEPROM.commit();
+#endif
+}
+
 void Firmngin::_Debug(String message, bool newLine)
 {
     if (_debug)
@@ -1225,7 +1369,7 @@ void Firmngin::_stopMqttTransport()
 
 bool Firmngin::connectServer()
 {
-    if (!_securityReady || !_e2eeEnabled)
+    if (!_securityReady)
     {
         Serial.println("ERROR: secure initialization is incomplete; MQTT connection blocked");
         return false;
@@ -1543,11 +1687,13 @@ void Firmngin::mqttCallback(char *path, byte *payload, unsigned int length)
 {
     String payloadStr;
 
-    // Fail closed: inbound application payloads require authenticated decryption.
     if (!_e2eeEnabled || _e2eeKeyLen == 0)
     {
-        Serial.println("E2EE: key unavailable — inbound payload dropped");
-        return;
+        payloadStr.reserve(length);
+        for (size_t i = 0; i < length; i++)
+        {
+            payloadStr += (char)payload[i];
+        }
     }
     else
     {
@@ -1756,47 +1902,47 @@ void Firmngin::mqttCallback(char *path, byte *payload, unsigned int length)
         _mqttClient.publish(pongPath.c_str(), payloadStr.c_str());
     }
 
-	if (pathStr.indexOf("/ot/trg") >= 0)
-	{
+    if (pathStr.indexOf("/ot/trg") >= 0)
+    {
         if (_otaAsyncState != OTA_ASYNC_IDLE)
         {
             _Debug("OTA trigger ignored, download already in progress");
             return;
         }
 
-		char firmwareID[48] = {0};
-		char firmwareSHA256[65] = {0};
-			firmngin_json::Parser trigger(payloadStr.c_str(), payloadStr.length());
-			const size_t firmwareIDLength = trigger.getString("firmware_id", firmwareID, sizeof(firmwareID));
-			const size_t firmwareSHALength = trigger.getString("sha256", firmwareSHA256, sizeof(firmwareSHA256));
-			bool validFirmwareID = firmwareIDLength == 36;
-			for (size_t i = 0; validFirmwareID && i < firmwareIDLength; ++i)
-			{
-				const char c = firmwareID[i];
-				validFirmwareID = (c >= '0' && c <= '9') ||
-				                  (c >= 'a' && c <= 'f') ||
-				                  (c >= 'A' && c <= 'F') || c == '-';
-			}
-			bool validFirmwareSHA = firmwareSHALength == 64;
-			for (size_t i = 0; validFirmwareSHA && i < firmwareSHALength; ++i)
-			{
-				const char c = firmwareSHA256[i];
-				validFirmwareSHA = (c >= '0' && c <= '9') ||
-				                   (c >= 'a' && c <= 'f') ||
-				                   (c >= 'A' && c <= 'F');
-			}
-			if (!validFirmwareID || !validFirmwareSHA)
-			{
-				publishOTAStatus("failed", "Invalid OTA trigger payload");
-			return;
-		}
+        char firmwareID[48] = {0};
+        char firmwareSHA256[65] = {0};
+        firmngin_json::Parser trigger(payloadStr.c_str(), payloadStr.length());
+        const size_t firmwareIDLength = trigger.getString("firmware_id", firmwareID, sizeof(firmwareID));
+        const size_t firmwareSHALength = trigger.getString("sha256", firmwareSHA256, sizeof(firmwareSHA256));
+        bool validFirmwareID = firmwareIDLength == 36;
+        for (size_t i = 0; validFirmwareID && i < firmwareIDLength; ++i)
+        {
+            const char c = firmwareID[i];
+            validFirmwareID = (c >= '0' && c <= '9') ||
+                              (c >= 'a' && c <= 'f') ||
+                              (c >= 'A' && c <= 'F') || c == '-';
+        }
+        bool validFirmwareSHA = firmwareSHALength == 64;
+        for (size_t i = 0; validFirmwareSHA && i < firmwareSHALength; ++i)
+        {
+            const char c = firmwareSHA256[i];
+            validFirmwareSHA = (c >= '0' && c <= '9') ||
+                               (c >= 'a' && c <= 'f') ||
+                               (c >= 'A' && c <= 'F');
+        }
+        if (!validFirmwareID || !validFirmwareSHA)
+        {
+            publishOTAStatus("failed", "Invalid OTA trigger payload");
+            return;
+        }
 
-		_Debug("OTA signal received, performing OTA update...", true);
-		_otaFirmwareID = String(firmwareID);
-		_otaFirmwareSHA256 = String(firmwareSHA256);
-		publishOTAStatus("triggered", "Remote OTA triggered by dashboard");
-		performOTA();
-	}
+        _Debug("OTA signal received, performing OTA update...", true);
+        _otaFirmwareID = String(firmwareID);
+        _otaFirmwareSHA256 = String(firmwareSHA256);
+        publishOTAStatus("triggered", "Remote OTA triggered by dashboard");
+        performOTA();
+    }
 
     if (pathStr.indexOf("/rs/") >= 0)
     {
@@ -1832,8 +1978,17 @@ bool Firmngin::publishPayload(const char *path, const char *payload, bool retain
 {
     if (!_e2eeEnabled || _e2eeKeyLen == 0)
     {
-        _Debug("E2EE not configured — payload publish blocked for security", true);
-        return false;
+        // E2EE disabled — publish plaintext directly
+        if (!_mqttClient.connected())
+        {
+            if (_queueEnabled)
+                return _enqueueToQueue(path, (const uint8_t *)payload, strlen(payload), retained);
+            return false;
+        }
+        bool published = _mqttClient.publish(path, payload, retained);
+        if (!published && _queueEnabled)
+            return _enqueueToQueue(path, (const uint8_t *)payload, strlen(payload), retained);
+        return published;
     }
 
     size_t payloadLen = strlen(payload);

@@ -3,6 +3,7 @@
 
 #include <Arduino.h>
 #include <stdint.h>
+#include <stdio.h>
 
 namespace firmngin_json {
 

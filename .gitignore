@@ -13,3 +13,5 @@ releases/
 !src/keys.h.template
 # Local Pi runtime state
 .atl/
+.pi/
+.pi-subagents/
