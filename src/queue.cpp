@@ -48,15 +48,11 @@ void Firmngin::clearQueue()
 
 bool Firmngin::_initQueue()
 {
-#if defined(ESP32) || defined(ESP8266)
+#if defined(ESP32)
     if (_queueFileReady)
         return true;
 
-#if defined(ESP32)
     if (!LittleFS.begin(true))
-#elif defined(ESP8266)
-    if (!LittleFS.begin())
-#endif
     {
         _Debug("queue: LITTLEFS mount failed", true);
         return false;
@@ -105,7 +101,7 @@ bool Firmngin::_initQueue()
 void Firmngin::_shutdownQueue()
 {
     _queueFileReady = false;
-#if defined(ESP32) || defined(ESP8266)
+#if defined(ESP32)
     LittleFS.end();
 #endif
 }
@@ -116,7 +112,7 @@ void Firmngin::_resetQueueFile()
     _queueTail = 0;
     _queueCount = 0;
 
-#if defined(ESP32) || defined(ESP8266)
+#if defined(ESP32)
     File f = LittleFS.open(FIRMNGIN_QUEUE_FILE_NAME, "w");
     if (!f)
         return;
@@ -139,7 +135,7 @@ void Firmngin::_resetQueueFile()
 
 bool Firmngin::_readQueueHeader(uint16_t &head, uint16_t &tail, uint16_t &count)
 {
-#if defined(ESP32) || defined(ESP8266)
+#if defined(ESP32)
     File f = LittleFS.open(FIRMNGIN_QUEUE_FILE_NAME, "r");
     if (!f || f.size() < FIRMNGIN_QUEUE_HEADER_SIZE)
     {
@@ -164,7 +160,7 @@ bool Firmngin::_readQueueHeader(uint16_t &head, uint16_t &tail, uint16_t &count)
 
 bool Firmngin::_writeQueueHeader(uint16_t head, uint16_t tail, uint16_t count)
 {
-#if defined(ESP32) || defined(ESP8266)
+#if defined(ESP32)
     File f = LittleFS.open(FIRMNGIN_QUEUE_FILE_NAME, "r+");
     if (!f)
         return false;
@@ -191,7 +187,7 @@ bool Firmngin::_writeQueueHeader(uint16_t head, uint16_t tail, uint16_t count)
 
 bool Firmngin::_enqueueToQueue(const char *topic, const uint8_t *payload, size_t payloadLen, bool retained)
 {
-#if defined(ESP32) || defined(ESP8266)
+#if defined(ESP32)
     if (!_queueFileReady || topic == nullptr || payload == nullptr)
         return false;
 
@@ -238,7 +234,7 @@ bool Firmngin::_enqueueToQueue(const char *topic, const uint8_t *payload, size_t
 
 bool Firmngin::_peekQueueHead(String &topic, String &payload, bool &retained)
 {
-#if defined(ESP32) || defined(ESP8266)
+#if defined(ESP32)
     if (!_queueFileReady || _queueCount == 0)
         return false;
 
@@ -287,7 +283,7 @@ void Firmngin::_drainQueue()
 {
     if (!_queueEnabled || !_queueFileReady)
         return;
-    if (!_mqttClient.connected())
+    if (!_mqttIsConnected())
         return;
     if (_queueCount == 0)
     {
@@ -315,7 +311,7 @@ void Firmngin::_drainQueue()
             continue;
         }
 
-        bool ok = _mqttClient.publish(topic.c_str(), (const uint8_t *)payload.c_str(), payload.length(), retained);
+        bool ok = _mqttPublish(topic.c_str(), reinterpret_cast<const uint8_t *>(payload.c_str()), payload.length(), retained);
         if (!ok)
         {
             break;

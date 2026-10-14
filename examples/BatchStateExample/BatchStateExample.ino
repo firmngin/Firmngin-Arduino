@@ -10,21 +10,13 @@
 #include "keys.h"
 #include <firmngin.h>
 
-#if defined(ESP8266)
-#include <ESP8266WiFi.h>
-#elif defined(ESP32)
 #include <WiFi.h>
-#endif
 
 // WiFi credentials
 const char *ssid = "YOUR_SSID";
 const char *password = "YOUR_PASSWORD";
 
-#if defined(ESP8266)
-Firmngin fngin(DEVICE_ID, DEVICE_KEY, CLIENT_CERT, PRIVATE_KEY, SERVER_FINGERPRINT_BYTES);
-#elif defined(ESP32)
 Firmngin fngin(DEVICE_ID, DEVICE_KEY, SERVER_FINGERPRINT_BYTES, CLIENT_CERT, PRIVATE_KEY);
-#endif
 
 unsigned long lastBatchPush = 0;
 const unsigned long batchInterval = 5000; // Push batch every 5 seconds

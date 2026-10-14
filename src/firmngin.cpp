@@ -1,35 +1,16 @@
 #include "firmngin.h"
 #include "firmngin_identity.h"
 #include <math.h>
+#include <memory>
+#include <new>
 
 #if defined(ESP32)
 #include <esp_system.h>
-#elif defined(ESP8266)
-extern "C"
-{
-#include "user_interface.h"
-}
 #endif
 
 #if defined(ESP32)
 #include <Update.h>
 #include <esp_ota_ops.h>
-#elif defined(ESP8266)
-#include <Updater.h>
-#include <EEPROM.h>
-#endif
-
-// OTA rollback persistent state: Preferences (ESP32) / EEPROM struct (ESP8266)
-#if defined(ESP8266)
-#define OTA_RB_NVS_SIZE 64
-#define OTA_RB_NVS_MAGIC 0xA5
-struct OtaRbNvs
-{
-    char last_ok[48];
-    uint8_t pending;
-    uint8_t boot_cnt;
-    uint8_t magic;
-};
 #endif
 
 const char *NTP_SERVER = "pool.ntp.org";
@@ -38,6 +19,10 @@ int DAYLIGHT_OFFSET_SEC = 0;
 
 const char *MQTT_SERVER_ADDR = FIRMNGIN_BROKER_ADDR;
 const int MQTT_SERVER_PORT = FIRMNGIN_BROKER_PORT;
+
+// Defined near the OTA helpers at the end of this file; the audio stream connection
+// signs its request credentials with it long before that point.
+static String hmacSHA256(const char *key, const char *message);
 
 static bool parseFingerprintHex(const String &hexValue, uint8_t out[20])
 {
@@ -114,51 +99,12 @@ static bool isConfiguredPEM(const char *pem, const char *beginMarker)
     return pem != nullptr && pem[0] != '\0' && strstr(pem, beginMarker) != nullptr && strstr(pem, "[Your") == nullptr;
 }
 
-#if defined(ESP8266)
+#if defined(ESP32)
 Firmngin::Firmngin(const char *deviceId, const char *deviceKey)
     : _deviceId(deviceId),
       _deviceKey(deviceKey),
       _debug(false),
       _lastMQTTAttempt(0),
-      _mqttClient(_wifiClient),
-      _userMqttClient(_userMqttTransport),
-      _mqttServer(MQTT_SERVER_ADDR),
-      _mqttPort(MQTT_SERVER_PORT),
-      _e2eeEnabled(false)
-{
-    if (!PLATFORM_SUPPORTED)
-    {
-        Serial.println("ERROR: Platform not supported");
-    }
-}
-
-Firmngin::Firmngin(const char *deviceId, const char *deviceKey, const char *clientCert, const char *privateKey, const uint8_t *fingerprint)
-    : _deviceId(deviceId),
-      _deviceKey(deviceKey),
-      _debug(false),
-      _lastMQTTAttempt(0),
-      _mqttClient(_wifiClient),
-      _userMqttClient(_userMqttTransport),
-      _mqttServer(MQTT_SERVER_ADDR),
-      _mqttPort(MQTT_SERVER_PORT),
-      _e2eeEnabled(false),
-      _clientCert(clientCert),
-      _privateKey(privateKey),
-      _fingerprint(fingerprint)
-{
-    if (!PLATFORM_SUPPORTED)
-    {
-        Serial.println("ERROR: Platform not supported");
-    }
-}
-#elif defined(ESP32)
-Firmngin::Firmngin(const char *deviceId, const char *deviceKey)
-    : _deviceId(deviceId),
-      _deviceKey(deviceKey),
-      _debug(false),
-      _lastMQTTAttempt(0),
-      _mqttClient(_wifiClient),
-      _userMqttClient(_userMqttTransport),
       _mqttServer(MQTT_SERVER_ADDR),
       _mqttPort(MQTT_SERVER_PORT),
       _e2eeEnabled(false)
@@ -174,8 +120,6 @@ Firmngin::Firmngin(const char *deviceId, const char *deviceKey, const char *caCe
       _deviceKey(deviceKey),
       _debug(false),
       _lastMQTTAttempt(0),
-      _mqttClient(_wifiClient),
-      _userMqttClient(_userMqttTransport),
       _mqttServer(MQTT_SERVER_ADDR),
       _mqttPort(MQTT_SERVER_PORT),
       _e2eeEnabled(false),
@@ -195,8 +139,6 @@ Firmngin::Firmngin(const char *deviceId, const char *deviceKey, const uint8_t *f
       _deviceKey(deviceKey),
       _debug(false),
       _lastMQTTAttempt(0),
-      _mqttClient(_wifiClient),
-      _userMqttClient(_userMqttTransport),
       _mqttServer(MQTT_SERVER_ADDR),
       _mqttPort(MQTT_SERVER_PORT),
       _e2eeEnabled(false),
@@ -216,8 +158,6 @@ Firmngin::Firmngin(const char *deviceId, const char *deviceKey)
       _deviceKey(deviceKey),
       _debug(false),
       _lastMQTTAttempt(0),
-      _mqttClient(_wifiClient),
-      _userMqttClient(_userMqttTransport),
       _mqttServer(MQTT_SERVER_ADDR),
       _mqttPort(MQTT_SERVER_PORT),
       _e2eeEnabled(false)
@@ -229,78 +169,10 @@ Firmngin::Firmngin(const char *deviceId, const char *deviceKey)
 }
 #endif
 
-PubSubClient &Firmngin::mqttClient()
-{
-    return _userMqttClient;
-}
-
-Client &Firmngin::mqttTransport()
-{
-    return _userMqttTransport;
-}
-
-void Firmngin::mqttClientPrepare()
-{
-    if (_userMqttPrepared)
-        return;
-
-    uint16_t size = _userMqttBufferSize;
-    if (size < 128)
-        size = 128;
-    _userMqttClient.setBufferSize(size);
-    _userMqttClient.setKeepAlive(30);
-    _userMqttClient.setSocketTimeout(10);
-
-#if defined(ESP8266) || defined(ESP32)
-    if (_userMqttInsecure)
-        _userMqttTransport.setInsecure();
-#endif
-
-    _userMqttPrepared = true;
-}
-
-void Firmngin::mqttClientSetBufferSize(uint16_t size)
-{
-    if (_userMqttPrepared)
-        return;
-    if (size < 128)
-        size = 128;
-    _userMqttBufferSize = size;
-}
-
-void Firmngin::mqttClientSetInsecure(bool insecure)
-{
-    _userMqttInsecure = insecure;
-#if defined(ESP8266) || defined(ESP32)
-    if (insecure)
-    {
-        Serial.println("WARNING: user MQTT client TLS verification explicitly disabled");
-        _userMqttTransport.setInsecure();
-    }
-#endif
-}
-
-void Firmngin::mqttClientLoop()
-{
-    if (_userMqttPrepared && _userMqttClient.connected())
-        _userMqttClient.loop();
-}
-
-void Firmngin::mqttClientDisconnect()
-{
-    if (_userMqttClient.connected())
-        _userMqttClient.disconnect();
-    _userMqttTransport.stop();
-}
 
 Firmngin::~Firmngin()
 {
-#if defined(ESP8266) && KEYS_H_AVAILABLE
-    delete _clientCertList;
-    delete _clientPrivKey;
-    delete _trustAnchors;
-    delete _otaTrustAnchors;
-#endif
+    _mqttShutdown();
 }
 
 String Firmngin::getPathPayment(String deviceId)
@@ -449,6 +321,25 @@ void Firmngin::begin()
     if (!PLATFORM_SUPPORTED)
         return;
 
+    bool audioPins = false;
+    for (auto &sink : _speakers)
+        if (sink.i2s.pinsConfigured())
+        {
+            sink.i2s.begin();
+            audioPins = true;
+        }
+    for (const auto &source : _microphones)
+        if (source.i2s.pinsConfigured())
+            audioPins = true;
+    if (audioPins)
+    {
+#if defined(ESP32)
+        // A registered speaker or microphone needs the device-wide stream:
+        // connect and stand by even when this is an input-only device.
+        _audioAutoConnect = true;
+#endif
+    }
+
     _otaRollbackSetup();
 
     FirmnginIdentityRecord flashIdentity;
@@ -495,6 +386,11 @@ void Firmngin::begin()
         {
             _otaBaseUrl = flashIdentity.otaBaseUrl;
         }
+        if (flashIdentity.audioStreamUrl.length() > 0)
+        {
+            _runtimeAudioStreamUrl = flashIdentity.audioStreamUrl;
+        }
+        _runtimeAudioStreamToken = flashIdentity.audioStreamToken;
     }
     else if (!firmwareIdentityConfigured)
     {
@@ -530,117 +426,24 @@ void Firmngin::begin()
     _topicUpdateEntity = "/d/" + String(_deviceId) + "/ps";
     _topicUpdateEntities = "/d/" + String(_deviceId) + "/psb";
 
-    if (WiFi.status() != WL_CONNECTED)
+    if (!_networkReady())
     {
-        _Debug("wifi not connected, call begin() after WiFi is up");
+        _Debug("network not connected, call begin() after WiFi or Ethernet has an IP");
         return;
     }
 
     syncTime();
     printBanner();
 
-#if defined(ESP8266) || defined(ESP32)
+#if defined(ESP32)
     if (_mqttNoTls)
     {
-        Serial.println("WARNING: MQTT dev mode — TLS disabled");
-        _mqttClient.setClient(_plainWifiClient);
+        Serial.println("WARNING: server dev mode — TLS disabled");
     }
     else
     {
 #endif
-#if defined(ESP8266)
-        const char *clientCert = _identityLoaded ? _runtimeClientCert.c_str() : _clientCert;
-        const char *privateKey = _identityLoaded ? _runtimePrivateKey.c_str() : _privateKey;
-        const uint8_t *fingerprint = _fingerprint;
-
-#if KEYS_H_AVAILABLE
-        if (!_identityLoaded)
-        {
-            if (clientCert == nullptr)
-                clientCert = CLIENT_CERT;
-            if (privateKey == nullptr)
-                privateKey = PRIVATE_KEY;
-#if defined(USE_FINGERPRINT)
-            if (fingerprint == nullptr)
-                fingerprint = SERVER_FINGERPRINT_BYTES;
-#elif defined(USE_CA_CERT)
-#else
-            if (fingerprint == nullptr)
-                fingerprint = SERVER_FINGERPRINT_BYTES;
-#endif
-        }
-#endif
-
-        if (_identityLoaded && _runtimeUseFingerprint)
-        {
-            fingerprint = _runtimeFingerprint;
-        }
-
-        if (!isConfiguredPEM(clientCert, "-----BEGIN CERTIFICATE-----") ||
-            !isConfiguredPEM(privateKey, "PRIVATE KEY-----"))
-        {
-            Serial.println("ERROR: mTLS credentials not configured");
-            return;
-        }
-
-        if (_clientCertList != nullptr)
-        {
-            delete _clientCertList;
-        }
-        if (_clientPrivKey != nullptr)
-        {
-            delete _clientPrivKey;
-        }
-        _clientCertList = new BearSSL::X509List(clientCert);
-        _clientPrivKey = new BearSSL::PrivateKey(privateKey);
-        _wifiClient.setClientRSACert(_clientCertList, _clientPrivKey);
-        _wifiClient.setBufferSizes(512, 512);
-
-        if (_identityLoaded && _runtimeUseCA && isConfiguredPEM(_runtimeCaCert.c_str(), "-----BEGIN CERTIFICATE-----"))
-        {
-            if (_trustAnchors != nullptr)
-            {
-                delete _trustAnchors;
-            }
-            _trustAnchors = new BearSSL::X509List(_runtimeCaCert.c_str());
-            _wifiClient.setTrustAnchors(_trustAnchors);
-        }
-#if defined(USE_CA_CERT) && KEYS_H_AVAILABLE
-        else if (!_identityLoaded)
-        {
-            if (!isConfiguredPEM(CA_CERT, "-----BEGIN CERTIFICATE-----"))
-            {
-                Serial.println("ERROR: CA certificate is malformed or still uses the template placeholder; connection blocked");
-                delete _clientCertList;
-                delete _clientPrivKey;
-                _clientCertList = nullptr;
-                _clientPrivKey = nullptr;
-                return;
-            }
-            if (_trustAnchors != nullptr)
-            {
-                delete _trustAnchors;
-            }
-            _trustAnchors = new BearSSL::X509List(CA_CERT);
-            _wifiClient.setTrustAnchors(_trustAnchors);
-        }
-#endif
-        else if (fingerprint != nullptr)
-        {
-            _wifiClient.setFingerprint(fingerprint);
-            Serial.println("Server validation: Fingerprint");
-        }
-        else
-        {
-            Serial.println("ERROR: No server validation method configured");
-            delete _clientCertList;
-            delete _clientPrivKey;
-            _clientCertList = nullptr;
-            _clientPrivKey = nullptr;
-            return;
-        }
-
-#elif defined(ESP32)
+#if defined(ESP32)
     const char *caCert = _identityLoaded ? _runtimeCaCert.c_str() : _caCert;
     const char *clientCert = _identityLoaded ? _runtimeClientCert.c_str() : _clientCert;
     const char *privateKey = _identityLoaded ? _runtimePrivateKey.c_str() : _privateKey;
@@ -674,7 +477,6 @@ void Firmngin::begin()
 
     if (_insecure)
     {
-        _wifiClient.setInsecure();
         Serial.println("Server validation: DISABLED (setInsecure)");
     }
     else if (caCert != nullptr)
@@ -684,17 +486,14 @@ void Firmngin::begin()
             Serial.println("ERROR: CA certificate is malformed or still uses the template placeholder; connection blocked");
             return;
         }
-        _wifiClient.setCACert(caCert);
     }
     else
     {
         Serial.println("ERROR: CA certificate is not configured; connection blocked");
         return;
     }
-    _wifiClient.setCertificate(clientCert);
-    _wifiClient.setPrivateKey(privateKey);
 #endif
-#if defined(ESP8266) || defined(ESP32)
+#if defined(ESP32)
     }
 #endif
 
@@ -706,25 +505,12 @@ void Firmngin::begin()
     {
         _e2eeKeyLen = 0;
     }
-#if defined(ESP8266)
-    else if (_e2eeKeyLen != 32)
-    {
-        _e2eeKeyLen = 0;
-    }
-#endif
     else
     {
         _e2eeEnabled = true;
     }
 
     _securityReady = true;
-
-    _mqttClient.setServer(_mqttServer.c_str(), _mqttPort);
-    _mqttClient.setCallback([this](char *path, byte *payload, unsigned int length)
-                            { this->mqttCallback(path, payload, length); });
-    _mqttClient.setBufferSize(2048);
-    _mqttClient.setKeepAlive(15);
-    _mqttClient.setSocketTimeout(5);
 
     if (!_deferredCallbacksLoaded)
     {
@@ -735,6 +521,10 @@ void Firmngin::begin()
         for (const auto &entry : deferredEntityRegistrations())
         {
             _entityCallbacks[entry.first] = entry.second;
+        }
+        for (const auto &entry : deferredAudioEntityRegistrations())
+        {
+            bindAudioEntity(entry.first.c_str(), entry.second);
         }
         for (const auto &callback : deferredEntitiesRegistrations())
         {
@@ -814,11 +604,6 @@ void Firmngin::setTimezone(int timezone)
 void Firmngin::setNtpServer(const char *ntpServer)
 {
     NTP_SERVER = ntpServer;
-}
-
-void Firmngin::setClient(Client &client)
-{
-    _mqttClient.setClient(client);
 }
 
 void Firmngin::setDaylightOffsetSec(int daylightOffsetSec)
@@ -925,6 +710,39 @@ Verifications::Verifications(const String &jsonPayload)
 }
 
 // Payments constructor: parses pp or pm JSON automatically
+TerminalQR::TerminalQR(const String &payload)
+{
+    firmngin_json::Parser p(payload.c_str(), payload.length());
+    // Allocate once for the entire event. Raw QR content must never be truncated
+    // to the short string buffers used by payment titles.
+    std::unique_ptr<char[]> buf(new (std::nothrow) char[payload.length() + 1]);
+    if (!buf)
+        return;
+    auto read = [&](const char *key) -> String {
+        if (p.getString(key, buf.get(), payload.length() + 1) > 0)
+            return String(buf.get());
+        return String();
+    };
+    orderId = read("od");
+    orderCode = read("oc");
+    status = read("st");
+    amount = read("amt");
+    qrString = read("qr");
+    expiresAt = read("exp");
+}
+
+void Firmngin::onTerminalPaymentFailed(TerminalQRCallbackFunction callback)
+{
+    if (callback)
+        _terminalPaymentFailedCallbacks.push_back(callback);
+}
+
+void Firmngin::onTerminalQR(TerminalQRCallbackFunction callback)
+{
+    if (callback)
+        _terminalQRCallbacks.push_back(callback);
+}
+
 Payments::Payments(const String &jsonPayload)
 {
     _valid = false;
@@ -1044,6 +862,701 @@ void Firmngin::onEntity(const char *key, EntityCommandCallbackFunction callback)
     _entityCallbacks[String(key)] = callback;
 }
 
+// A newer clip cancels the one still playing, so the device plays what arrives
+// instead of fetching a URL per clip.
+// Request path of a stream url.
+static String audioStreamPath(const String &url)
+{
+    const int schemeEnd = url.indexOf("://");
+    if (schemeEnd < 0)
+        return "";
+    const int pathStart = url.indexOf('/', schemeEnd + 3);
+    if (pathStart < 0)
+        return "";
+    return url.substring(pathStart);
+}
+
+String Firmngin::_resolveAudioStreamUrl() const
+{
+    String base = _runtimeAudioStreamUrl;
+    if (base.length() > 0 && (base.startsWith("ws://") || base.startsWith("wss://")))
+        return base;
+    if (base.length() == 0)
+        base = _audioStreamBaseUrl;
+
+    const bool secure = !base.startsWith("http://");
+    const char *schemeEnd = strstr(base.c_str(), "://");
+    if (schemeEnd == nullptr)
+        return "";
+
+    char streamId[33];
+    if (!firmngin_audio_stream_id(_deviceId, _deviceKey, streamId, sizeof(streamId)))
+        return "";
+
+    String hostAndBase = base.substring(static_cast<unsigned int>(schemeEnd - base.c_str()) + 3);
+    while (hostAndBase.endsWith("/"))
+        hostAndBase.remove(hostAndBase.length() - 1);
+    if (hostAndBase.length() == 0)
+        return "";
+    return String(secure ? "wss://" : "ws://") + hostAndBase + "/v1/e/" + streamId;
+}
+
+bool Firmngin::openAudioStream(AudioChunkCallbackFunction onChunk, AudioStreamEventCallbackFunction onEvent)
+{
+    return openAudioStream(FirmnginAudioConfig(), onChunk, onEvent);
+}
+
+void Firmngin::enableAudioStream(AudioStreamEventCallbackFunction onEvent)
+{
+    _audioEventCallback = onEvent;
+#if defined(ESP32)
+    _audioAutoConnect = true;
+    _audioAutoConnectAtMs = 0;
+    _tryAutoConnectAudio();
+#else
+    _notifyAudioEvent(AUDIO_ERROR, "audio streaming requires ESP32");
+#endif
+}
+
+FirmnginI2s &Firmngin::setAudioInterface(const Entity &entity, FirmnginI2sChip chip)
+{
+    return setAudioInterface(entity.key().c_str(), chip);
+}
+
+FirmnginI2s &Firmngin::setAudioInterface(const char *key, FirmnginI2sChip chip)
+{
+    if (key != nullptr && key[0] != '\0' && chip != INMP441 && chip != I2S_RX)
+    {
+        for (auto &sink : _speakers)
+            if (sink.key == key)
+                return sink.i2s.setChip(chip);
+        _speakers.push_back(SpeakerSink{String(key), FirmnginI2s(chip)});
+        return _speakers.back().i2s;
+    }
+    // Every output must be bound to an entity. An empty key gets a never-begun sink
+    // whose write() no-ops, so a bug announces itself as silence, not a crash.
+    static FirmnginI2s unbound;
+    return unbound;
+}
+
+FirmnginI2s &Firmngin::setAudioInput(const Entity &entity, FirmnginI2sChip chip)
+{
+    return setAudioInput(entity.key().c_str(), chip);
+}
+
+FirmnginI2s &Firmngin::setAudioInput(const char *key, FirmnginI2sChip chip)
+{
+    if (key != nullptr && key[0] != '\0' && chip == INMP441)
+    {
+        for (auto &source : _microphones)
+            if (source.key == key)
+                return source.i2s.setChip(chip);
+#if defined(ESP32)
+        // _activeMicrophone points into this vector while the capture task runs.
+        // Refuse a new binding until it finishes so vector growth cannot invalidate
+        // that pointer underneath the task.
+        if (_audioInputRecording)
+        {
+            static FirmnginI2s recordingLocked(INMP441);
+            return recordingLocked;
+        }
+#endif
+        _microphones.push_back(MicrophoneSource{String(key), FirmnginI2s(chip)});
+#if defined(ESP32)
+        _audioAutoConnect = true;
+        _audioAutoConnectAtMs = 0;
+#endif
+        return _microphones.back().i2s;
+    }
+    static FirmnginI2s unbound(INMP441);
+    return unbound;
+}
+
+bool Firmngin::startAudioInput(const Entity &entity)
+{
+    return startAudioInput(entity.key().c_str());
+}
+
+bool Firmngin::startAudioInput(const char *key)
+{
+#if !defined(ESP32)
+    (void)key;
+    _notifyAudioEvent(AUDIO_INPUT_ERROR, "audio input requires ESP32");
+    return false;
+#else
+    if (key == nullptr || key[0] == '\0' || _audioInputRecording ||
+        _audioWs == nullptr || !esp_websocket_client_is_connected(_audioWs))
+        return false;
+
+    MicrophoneSource *source = nullptr;
+    for (auto &candidate : _microphones)
+        if (candidate.key == key)
+        {
+            source = &candidate;
+            break;
+        }
+    if (source == nullptr || !source->i2s.pinsConfigured())
+        return false;
+
+    // MVP is deliberately half-duplex: stop playback before taking ownership of
+    // I2S for the microphone. This also keeps Arduino-ESP32 core 2.x safe, where
+    // every FirmnginI2s instance uses I2S_NUM_0.
+    _abortAudioClip();
+    for (auto &sink : _speakers)
+    {
+        if (sink.i2s.ready())
+            (void)sink.i2s.flush();
+        sink.i2s.end();
+    }
+
+    source->i2s.begin();
+    if (!source->i2s.ready())
+    {
+        for (auto &sink : _speakers)
+            if (sink.i2s.pinsConfigured())
+                sink.i2s.begin();
+        _notifyAudioEvent(AUDIO_INPUT_ERROR, "audio input I2S could not start", key);
+        return false;
+    }
+
+    char captureId[32];
+    snprintf(captureId, sizeof(captureId), "%lu-%08lx",
+             static_cast<unsigned long>(time(nullptr)),
+             static_cast<unsigned long>(esp_random()));
+    if (!_sendAudioInputControl("audio.input.start", key, captureId))
+    {
+        source->i2s.end();
+        for (auto &sink : _speakers)
+            if (sink.i2s.pinsConfigured())
+                sink.i2s.begin();
+        _notifyAudioEvent(AUDIO_INPUT_ERROR, "audio input start could not be sent", key);
+        return false;
+    }
+
+    _activeMicrophone = source;
+    _audioInputCaptureId = captureId;
+    _audioInputStopRequested = false;
+    _audioInputCancelRequested = false;
+    _audioInputRecording = true;
+    if (xTaskCreate(_audioInputTask, "firmngin-mic", FIRMNGIN_AUDIO_INPUT_TASK_STACK,
+                    this, 2, &_audioInputTaskHandle) != pdPASS)
+    {
+        _finishAudioInput(true);
+        _notifyAudioEvent(AUDIO_INPUT_ERROR, "audio input task could not start", key);
+        return false;
+    }
+    return true;
+#endif
+}
+
+void Firmngin::stopAudioInput()
+{
+#if defined(ESP32)
+    _audioInputStopRequested = true;
+#endif
+}
+
+bool Firmngin::isAudioInputRecording() const
+{
+#if defined(ESP32)
+    return _audioInputRecording;
+#else
+    return false;
+#endif
+}
+
+#if defined(ESP32)
+bool Firmngin::_sendAudioInputControl(const char *type, const char *entityKey, const char *captureId)
+{
+    const esp_websocket_client_handle_t ws = _audioWs;
+    if (ws == nullptr || !esp_websocket_client_is_connected(ws))
+        return false;
+    char payload[256];
+    firmngin_json::Builder builder(payload, sizeof(payload));
+    builder.reset();
+    if (!builder.add("type", type) || !builder.add("entity_key", entityKey) ||
+        !builder.add("capture_id", captureId))
+        return false;
+    if (strcmp(type, "audio.input.start") == 0)
+    {
+        if (!builder.add("codec", "pcm_s16le") ||
+            !builder.add("sample_rate", static_cast<uint64_t>(16000)) ||
+            !builder.add("channels", static_cast<uint64_t>(1)) ||
+            !builder.add("frame_ms", static_cast<uint64_t>(20)) ||
+            !builder.add("frame_bytes", static_cast<uint64_t>(AUDIO_FRAME_BYTES)))
+            return false;
+    }
+    const char *json = builder.build();
+    const int len = static_cast<int>(strlen(json));
+    return esp_websocket_client_send_text(ws, json, len, pdMS_TO_TICKS(1000)) == len;
+}
+
+void Firmngin::_finishAudioInput(bool cancelled)
+{
+    if (!_audioInputRecording)
+        return;
+    const String key = _activeMicrophone != nullptr ? _activeMicrophone->key : String();
+    if (_audioWs != nullptr && esp_websocket_client_is_connected(_audioWs))
+        (void)_sendAudioInputControl(cancelled ? "audio.input.cancel" : "audio.input.end",
+                                     key.c_str(), _audioInputCaptureId.c_str());
+    if (_activeMicrophone != nullptr)
+        _activeMicrophone->i2s.end();
+    _audioInputRecording = false;
+    _audioInputStopRequested = false;
+    _audioInputCancelRequested = false;
+    _activeMicrophone = nullptr;
+    _audioInputCaptureId = "";
+    for (auto &sink : _speakers)
+        if (sink.i2s.pinsConfigured())
+            sink.i2s.begin();
+}
+
+void Firmngin::_audioInputTask(void *context)
+{
+    Firmngin *self = static_cast<Firmngin *>(context);
+    if (self != nullptr)
+        self->_runAudioInput();
+    if (self != nullptr)
+        self->_audioInputTaskHandle = nullptr;
+    vTaskDelete(nullptr);
+}
+
+void Firmngin::_runAudioInput()
+{
+    uint8_t raw[AUDIO_SAMPLES_PER_FRAME * 2 * sizeof(int32_t)];
+    uint8_t pcm[AUDIO_FRAME_BYTES];
+    const unsigned long startedAt = millis();
+    bool cancelled = false;
+
+    while (!_audioInputStopRequested && millis() - startedAt < FIRMNGIN_AUDIO_INPUT_MAX_MS)
+    {
+        MicrophoneSource *source = _activeMicrophone;
+        if (source == nullptr || source->i2s.read(raw, sizeof(raw)) != sizeof(raw))
+        {
+            cancelled = true;
+            break;
+        }
+        if (firmngin_audio_inmp441_to_mono_s16le(
+                raw, sizeof(raw), source->i2s.selectedChannel() == FIRMNGIN_I2S_RIGHT,
+                pcm, sizeof(pcm)) != sizeof(pcm))
+        {
+            cancelled = true;
+            break;
+        }
+        const esp_websocket_client_handle_t ws = _audioWs;
+        if (ws == nullptr || !esp_websocket_client_is_connected(ws) ||
+            esp_websocket_client_send_bin(ws, reinterpret_cast<const char *>(pcm),
+                                          sizeof(pcm), pdMS_TO_TICKS(1000)) != sizeof(pcm))
+        {
+            cancelled = true;
+            break;
+        }
+    }
+
+    cancelled = cancelled || _audioInputCancelRequested;
+    const String entityKey = _activeMicrophone != nullptr ? _activeMicrophone->key : String();
+    _finishAudioInput(cancelled);
+    if (cancelled)
+        _notifyAudioEvent(AUDIO_INPUT_ERROR, "audio input capture interrupted", entityKey.c_str());
+}
+#endif
+
+FirmnginI2s *Firmngin::_activeSink()
+{
+    // Routing is strict: a missing or unknown entity_key must never make audio leak
+    // to another speaker on a multi-output device.
+    if (_activeSinkKey.length() == 0)
+        return nullptr;
+    for (auto &sink : _speakers)
+        if (sink.key == _activeSinkKey)
+            return &sink.i2s;
+    return nullptr;
+}
+
+bool Firmngin::_writeActiveSink(const uint8_t *data, size_t len)
+{
+    FirmnginI2s *sink = _activeSink();
+    return sink != nullptr && sink->write(data, len);
+}
+
+bool Firmngin::_anySinkReady() const
+{
+    for (const auto &sink : _speakers)
+        if (sink.i2s.ready())
+            return true;
+    return false;
+}
+
+bool Firmngin::_hasAudioInterfaceConfigured() const
+{
+    for (const auto &sink : _speakers)
+        if (sink.i2s.pinsConfigured())
+            return true;
+    for (const auto &source : _microphones)
+        if (source.i2s.pinsConfigured())
+            return true;
+    return false;
+}
+
+void Firmngin::_applyAudioStreamUrl(const String &url)
+{
+    if (url.length() == 0 || url == _runtimeAudioStreamUrl)
+        return;
+    _runtimeAudioStreamUrl = url;
+#if defined(ESP32)
+    if (!_audioKeepAlive)
+        return;
+    // The endpoint moved under a live stream: re-sign against the new URL on the next
+    // loop pass instead of waiting for the socket to drop.
+    _audioUrl = url;
+    _audioReconnectPending = true;
+    _audioReconnectAtMs = millis();
+#endif
+}
+
+void Firmngin::_tryAutoConnectAudio()
+{
+#if defined(ESP32)
+    if (!_audioAutoConnect || _audioKeepAlive || !_hasAudioInterfaceConfigured())
+        return;
+    // Signing needs a real clock; NTP sync started by begin() flips this.
+    if (static_cast<unsigned long>(time(nullptr)) < AUDIO_MIN_VALID_EPOCH)
+        return;
+    // The endpoint rides in on init's audio_output entity. Without a provisioned URL,
+    // wait for that frame rather than guessing the legacy derived path.
+    if (_runtimeAudioStreamUrl.length() == 0 && !_deviceInitReceived)
+        return;
+    if (static_cast<long>(millis() - _audioAutoConnectAtMs) < 0)
+        return;
+    // openAudioStream() closes first, which clears the arm. Re-arm on failure so a
+    // bad endpoint retries on a timer instead of once per loop(); on success the
+    // stream's own keep-alive reconnect takes over.
+    if (!openAudioStream(FirmnginAudioConfig(), nullptr, _audioEventCallback))
+    {
+        _audioAutoConnect = true;
+        _audioAutoConnectAtMs = millis() + 5000;
+    }
+#endif
+}
+
+Firmngin &Firmngin::bindAudioEntity(const char *key, AudioStreamEventCallbackFunction handler)
+{
+    if (key != nullptr && key[0] != '\0')
+        _audioEntityCallbacks[String(key)] = handler;
+#if defined(ESP32)
+    if (!_audioKeepAlive)
+    {
+        _audioAutoConnect = true;
+        _audioAutoConnectAtMs = 0;
+    }
+#endif
+    return *this;
+}
+
+void Firmngin::_dispatchAudioEntity(const FirmnginAudioEventMessage &message)
+{
+    if (_audioEntityCallbacks.empty())
+        return;
+    const char *key = message.entity_key[0] != '\0' ? message.entity_key : nullptr;
+    if (key == nullptr)
+    {
+        // Device-wide event (ready/error/disconnect): every bound handler hears it.
+        for (auto &entry : _audioEntityCallbacks)
+            if (entry.second)
+                entry.second(message.event, nullptr);
+        return;
+    }
+    auto it = _audioEntityCallbacks.find(String(key));
+    if (it == _audioEntityCallbacks.end() || !it->second)
+        return;
+    it->second(message.event, key);
+}
+
+bool Firmngin::openAudioStream(const char *url, const char *token, AudioChunkCallbackFunction onChunk,
+                               AudioStreamEventCallbackFunction onEvent)
+{
+    FirmnginAudioConfig config;
+    config.url = url;
+    config.token = token;
+    return openAudioStream(config, onChunk, onEvent);
+}
+
+#if defined(ESP32)
+void Firmngin::_releaseAudioQueues()
+{
+    if (_audioRx != nullptr)
+    {
+        vStreamBufferDelete(_audioRx);
+        _audioRx = nullptr;
+    }
+    if (_audioEvents != nullptr)
+    {
+        vQueueDelete(_audioEvents);
+        _audioEvents = nullptr;
+    }
+    _audioPcmAccumLen = 0;
+    _audioStreaming = false;
+    _audioEndPending = false;
+    _audioEndDetail[0] = '\0';
+}
+
+void Firmngin::_abortAudioClip()
+{
+    _audioFlushGen = _audioFlushGen + 1;
+    _audioPcmAccumLen = 0;
+    _audioStreaming = false;
+    _audioEndPending = false;
+    _audioEndDetail[0] = '\0';
+    if (_audioRx != nullptr)
+        xStreamBufferReset(_audioRx);
+}
+
+bool Firmngin::_enqueueAudioFrame(const uint8_t *frame, uint32_t flushGen)
+{
+    if (_audioRx == nullptr || frame == nullptr)
+        return false;
+    if (flushGen != _audioFlushGen)
+        return false;
+    // Non-blocking: the websocket task must keep reading. Blocking here while the
+    // ring is full prevents audio.flush (manual stop) from being handled, the
+    // gateway Write stalls, and the peer resets the TCP connection.
+    return xStreamBufferSend(_audioRx, frame, AUDIO_FRAME_BYTES, 0) == AUDIO_FRAME_BYTES;
+}
+
+void Firmngin::_stopAudioWs()
+{
+    // Detach the handle first. A capture task that is between frames will now skip
+    // its terminal control instead of racing a client that is being destroyed. A
+    // send already in progress is bounded by its 1 s timeout and is covered by the
+    // wait below.
+    esp_websocket_client_handle_t ws = _audioWs;
+    _audioWs = nullptr;
+    _audioInputCancelRequested = true;
+    _audioInputStopRequested = true;
+    const unsigned long inputStopDeadline = millis() + 1250;
+    while (_audioInputTaskHandle != nullptr && static_cast<long>(millis() - inputStopDeadline) < 0)
+        delay(1);
+    if (ws != nullptr)
+    {
+        esp_websocket_client_stop(ws);
+        esp_websocket_client_destroy(ws);
+    }
+}
+
+bool Firmngin::_waitForAudioClock()
+{
+    if (static_cast<unsigned long>(time(nullptr)) >= AUDIO_MIN_VALID_EPOCH)
+        return true;
+    const unsigned long waitStart = millis();
+    while (static_cast<unsigned long>(time(nullptr)) < AUDIO_MIN_VALID_EPOCH &&
+           millis() - waitStart < FIRMNGIN_NTP_SYNC_TIMEOUT_MS)
+        delay(50);
+    return static_cast<unsigned long>(time(nullptr)) >= AUDIO_MIN_VALID_EPOCH;
+}
+
+bool Firmngin::_buildAudioWsHeaders()
+{
+    _audioHeaders = "";
+    if (_audioToken.length() > 0)
+        _audioHeaders += String("Authorization: Bearer ") + _audioToken + "\r\n";
+
+    if (_deviceId == nullptr || _deviceKey == nullptr ||
+        strlen(_deviceId) == 0 || strlen(_deviceKey) == 0)
+        return true;
+
+    if (!_waitForAudioClock())
+    {
+        _notifyAudioEvent(AUDIO_ERROR, "device clock is not set; the stream connection cannot be signed");
+        return false;
+    }
+
+    const unsigned long now = static_cast<unsigned long>(time(nullptr));
+    const String path = audioStreamPath(_audioUrl);
+    char message[AUDIO_AUTH_MESSAGE_MAX];
+    if (path.length() == 0 ||
+        !firmngin_audio_ws_auth_message(_deviceId, String(now).c_str(), path.c_str(), message, sizeof(message)))
+    {
+        _notifyAudioEvent(AUDIO_ERROR, "audio stream url has no usable path");
+        return false;
+    }
+    _audioHeaders += String("X-Device-ID: ") + _deviceId + "\r\n";
+    _audioHeaders += String("X-Device-Timestamp: ") + String(now) + "\r\n";
+    _audioHeaders += String("X-Device-Signature: ") + hmacSHA256(_deviceKey, message) + "\r\n";
+    return true;
+}
+
+bool Firmngin::_startAudioWsClient()
+{
+    if (!_buildAudioWsHeaders())
+        return false;
+
+    const bool isSecure = _audioUrl.startsWith("wss://");
+    const char *activeServiceCA = _activeServiceCACert();
+    if (isSecure && !_insecure && activeServiceCA == nullptr)
+    {
+        _notifyAudioEvent(AUDIO_ERROR, "service CA certificate not configured");
+        return false;
+    }
+
+    esp_websocket_client_config_t wsConfig = {};
+    wsConfig.uri = _audioUrl.c_str();
+    wsConfig.headers = _audioHeaders.length() > 0 ? _audioHeaders.c_str() : nullptr;
+    wsConfig.user_context = this;
+    wsConfig.buffer_size = _audioWsBufferBytes;
+    wsConfig.task_stack = _audioWsTaskStack;
+    // Native auto-reconnect would reuse a frozen HMAC timestamp and fail after the
+    // platform's skew window. Reconnect is owned by loop() with a freshly signed header.
+    wsConfig.disable_auto_reconnect = true;
+    if (isSecure)
+    {
+        wsConfig.cert_pem = _insecure ? nullptr : activeServiceCA;
+        wsConfig.skip_cert_common_name_check = _insecure;
+        if (_clientCert != nullptr)
+            wsConfig.client_cert = _clientCert;
+        if (_privateKey != nullptr)
+            wsConfig.client_key = _privateKey;
+    }
+
+    _audioWs = esp_websocket_client_init(&wsConfig);
+    if (_audioWs == nullptr)
+    {
+        _notifyAudioEvent(AUDIO_ERROR, "audio stream client init failed");
+        return false;
+    }
+    esp_websocket_register_events(_audioWs, WEBSOCKET_EVENT_ANY, _audioWsEventHandler, this);
+    if (esp_websocket_client_start(_audioWs) != ESP_OK)
+    {
+        _stopAudioWs();
+        _notifyAudioEvent(AUDIO_ERROR, "audio stream connect failed");
+        return false;
+    }
+    return true;
+}
+#endif
+
+bool Firmngin::openAudioStream(const FirmnginAudioConfig &config, AudioChunkCallbackFunction onChunk,
+                               AudioStreamEventCallbackFunction onEvent)
+{
+    // Copy strings before closeAudioStream(): callers may point config.url/token at a
+    // String owned by this instance, while the native client keeps its own pointers.
+    String resolvedURL = config.url != nullptr && config.url[0] != '\0'
+                             ? String(config.url)
+                             : _resolveAudioStreamUrl();
+    String resolvedToken = config.token != nullptr
+                               ? String(config.token)
+                               : _runtimeAudioStreamToken;
+
+    closeAudioStream();
+    _audioChunkCallback = onChunk;
+    _audioEventCallback = onEvent;
+    _audioUsesBuiltinSink = false;
+
+    // These checks answer before the socket exists, so they are reported straight
+    // back: the caller is in setup()/loop(), never the socket task.
+    const bool isSecure = resolvedURL.startsWith("wss://");
+    if (resolvedURL.length() == 0)
+    {
+        _notifyAudioEvent(AUDIO_ERROR, "audio stream url is not configured");
+        return false;
+    }
+    if (!isSecure && !resolvedURL.startsWith("ws://"))
+    {
+        _notifyAudioEvent(AUDIO_ERROR, "audio stream url must use ws:// or wss://");
+        return false;
+    }
+    // Late hardware registration: begin() already ran, so start configured I2S now.
+    for (auto &sink : _speakers)
+        if (sink.i2s.pinsConfigured() && !sink.i2s.ready())
+            sink.i2s.begin();
+    if (!_audioChunkCallback && !_microphones.empty())
+    {
+        // An input-only device needs the same persistent WSS but has no playback
+        // sink. Server output frames are ignored until a speaker is registered.
+    }
+    else if (!_audioChunkCallback)
+    {
+        if (!_anySinkReady())
+        {
+            _notifyAudioEvent(AUDIO_ERROR,
+                              "audio chunk callback is required unless a speaker is ready");
+            return false;
+        }
+        _audioChunkCallback = [this](const uint8_t *data, size_t len) {
+            return _writeActiveSink(data, len);
+        };
+        _audioUsesBuiltinSink = true;
+    }
+    if (config.bufferFrames == 0 || config.framesPerLoop == 0 ||
+        config.websocketBufferBytes < AUDIO_FRAME_BYTES || config.websocketTaskStack < 2048)
+    {
+        _notifyAudioEvent(AUDIO_ERROR, "audio stream config is invalid");
+        return false;
+    }
+#if !defined(ESP32)
+    _audioChunkCallback = nullptr;
+    _audioEventCallback = nullptr;
+    _notifyAudioEvent(AUDIO_ERROR, "audio streaming requires ESP32");
+    return false;
+#else
+    _audioBufferFrames = config.bufferFrames;
+    _audioFramesPerLoop = config.framesPerLoop;
+    _audioWsBufferBytes = config.websocketBufferBytes;
+    _audioWsTaskStack = config.websocketTaskStack;
+    _audioUrl = resolvedURL;
+    _audioToken = resolvedToken;
+    _audioKeepAlive = true;
+    _audioReconnectPending = false;
+    _audioEndPending = false;
+
+    _audioRx = xStreamBufferCreate(AUDIO_FRAME_BYTES * _audioBufferFrames, 1);
+    _audioEvents = xQueueCreate(FIRMNGIN_AUDIO_EVENT_QUEUE_LEN, sizeof(FirmnginAudioEventMessage));
+    if (_audioRx == nullptr || _audioEvents == nullptr)
+    {
+        _releaseAudioQueues();
+        _audioKeepAlive = false;
+        _notifyAudioEvent(AUDIO_ERROR, "audio stream buffers could not be allocated");
+        return false;
+    }
+
+    if (!_startAudioWsClient())
+    {
+        _releaseAudioQueues();
+        _audioKeepAlive = false;
+        return false;
+    }
+    return true;
+#endif
+}
+
+void Firmngin::closeAudioStream()
+{
+#if defined(ESP32)
+    stopAudioInput();
+    _audioKeepAlive = false;
+    _audioReconnectPending = false;
+    _audioAutoConnect = false;
+    _audioAutoConnectAtMs = 0;
+    _stopAudioWs();
+    _releaseAudioQueues();
+    _audioUrl = "";
+    _audioHeaders = "";
+    _audioToken = "";
+#endif
+    _audioChunkCallback = nullptr;
+    _audioEventCallback = nullptr;
+    _audioUsesBuiltinSink = false;
+    _activeSinkKey = "";
+}
+
+bool Firmngin::isAudioStreamConnected() const
+{
+#if defined(ESP32)
+    return _audioWs != nullptr && esp_websocket_client_is_connected(_audioWs);
+#else
+    return false;
+#endif
+}
+
 EntityValue ActiveSession::entity(const char *key) const
 {
     if (_instance == nullptr)
@@ -1066,12 +1579,46 @@ bool ActiveSession::endSession()
 }
 
 // Inits constructor: parses init JSON automatically
+static String findInitAudioStreamUrl(const String &entitiesJson)
+{
+    // Every audio entity carries the device-wide stream URL in its value instead
+    // of a pin. Accept input (t=5) as well as output (t=6), so a microphone-only
+    // device can open the same persistent WSS. Entity values are scalars, so each
+    // entry is a flat object.
+    const char *p = entitiesJson.c_str();
+    const char *end = p + entitiesJson.length();
+    while (p < end)
+    {
+        const char *objStart = strchr(p, '{');
+        if (objStart == nullptr || objStart >= end)
+            break;
+        const char *objEnd = strchr(objStart, '}');
+        if (objEnd == nullptr || objEnd >= end)
+            break;
+        firmngin_json::Parser entry(objStart, static_cast<size_t>(objEnd - objStart) + 1);
+        const int type = entry.getInt("t", 0);
+        if (type == 5 || type == 6)
+        {
+            // current_value remains the device-wide WebSocket endpoint. The latest
+            // recording is stored separately in audio_clip_url, so only accept an
+            // actual ws(s) URL here.
+            char url[FIRMNGIN_AUDIO_STREAM_URL_MAX];
+            if (entry.getString("v", url, sizeof(url)) > 0 &&
+                (strncmp(url, "wss://", 6) == 0 || strncmp(url, "ws://", 5) == 0))
+                return String(url);
+        }
+        p = objEnd + 1;
+    }
+    return String();
+}
+
 Inits::Inits(const String &jsonPayload)
 {
     _valid = false;
     _entitiesJson = "";
     _merchantStatus = "";
     _activeOrderId = "";
+    _audioStreamUrl = "";
     _verificationFlag = 0;
     _modeFlag = 1;
     _kioskFlag = 0;
@@ -1086,6 +1633,7 @@ Inits::Inits(const String &jsonPayload)
     if (raw != nullptr && rawLen > 0)
     {
         _entitiesJson = String(raw).substring(0, rawLen);
+        _audioStreamUrl = findInitAudioStreamUrl(_entitiesJson);
     }
     if (p.getString("m", buf, sizeof(buf)) > 0)
     {
@@ -1097,7 +1645,7 @@ Inits::Inits(const String &jsonPayload)
     }
     _verificationFlag = p.getInt("vf", 0);
     _modeFlag = p.getInt("md", 1);
-    if (_modeFlag != 2)
+    if (_modeFlag != 1 && _modeFlag != 2 && _modeFlag != 3)
         _modeFlag = 1;
     _kioskFlag = p.getInt("ki", 0);
     _deviceLocalEndFlag = p.getInt("dl", 0);
@@ -1174,7 +1722,7 @@ void Firmngin::loop()
     }
 #endif
 
-    if (!PLATFORM_SUPPORTED || !_securityReady || WiFi.status() != WL_CONNECTED)
+    if (!PLATFORM_SUPPORTED || !_securityReady || !_networkReady())
         return;
 
     _otaRollbackLoop();
@@ -1191,28 +1739,27 @@ void Firmngin::loop()
     static unsigned long lastReconnectAttempt = 0;
     static unsigned long backoffDelay = 2000;
 
-    if (!_mqttClient.connected())
+    _drainMqttInbox();
+    if (!_mqttIsConnected())
     {
-        unsigned long now = millis();
-        if (now - lastReconnectAttempt > backoffDelay)
+        if (!_mqttIsStarted())
         {
-            lastReconnectAttempt = now;
-            backoffDelay = min(backoffDelay * 2, 15000UL);
-            if (connectServer())
+            unsigned long now = millis();
+            if (now - lastReconnectAttempt > backoffDelay)
             {
-                backoffDelay = 2000UL;
+                lastReconnectAttempt = now;
+                backoffDelay = min(backoffDelay * 2, 15000UL);
+                if (connectServer())
+                    backoffDelay = 2000UL;
             }
         }
     }
-    else
+    else if (_queueEnabled && _queueFileReady && _queueCount > 0)
     {
-        _mqttClient.loop();
-        if (_queueEnabled && _queueFileReady && _queueCount > 0)
-        {
-            _drainQueue();
-        }
+        _drainQueue();
     }
 
+    _processAudio();
     _processOTA();
     runActiveSessionHandlers();
 }
@@ -1226,17 +1773,6 @@ void Firmngin::_otaRollbackSetup()
     _otaLastOkVersion = _otaPrefs.getString("last_ok", "");
     _otaRollbackPending = _otaPrefs.getBool("pending", false);
     _otaRollbackBootCount = _otaPrefs.getUChar("boot_cnt", 0);
-#elif defined(ESP8266)
-    EEPROM.begin(OTA_RB_NVS_SIZE);
-    _otaRollbackReady = true;
-    OtaRbNvs nvs;
-    EEPROM.get(0, nvs);
-    if (nvs.magic == OTA_RB_NVS_MAGIC)
-    {
-        _otaLastOkVersion = String(nvs.last_ok);
-        _otaRollbackPending = (nvs.pending != 0);
-        _otaRollbackBootCount = nvs.boot_cnt;
-    }
 #endif
 
     OtaRollbackState st;
@@ -1269,13 +1805,13 @@ void Firmngin::_otaRollbackSetup()
 
 void Firmngin::_otaRollbackLoop()
 {
-#if defined(ESP8266) || defined(ESP32)
+#if defined(ESP32)
     if (!_otaRollbackReady)
         return;
 
-    // Publish the deferred boot report (rollback / boot failure) once the network is up.
+    // Send the deferred boot report (rollback / boot failure) once the network is up.
     if (_otaBootReportStatus.length() > 0 && !_otaRollbackReportPublished &&
-        _mqttClient.connected())
+        _mqttIsConnected())
     {
         publishOTAStatus(_otaBootReportStatus.c_str(), _otaBootReportMessage.c_str());
         _otaRollbackReportPublished = true;
@@ -1318,21 +1854,6 @@ void Firmngin::_persistOtaRollbackState()
     _otaPrefs.putString("last_ok", _otaLastOkVersion);
     _otaPrefs.putBool("pending", _otaRollbackPending);
     _otaPrefs.putUChar("boot_cnt", (uint8_t)_otaRollbackBootCount);
-#elif defined(ESP8266)
-    if (!_otaRollbackReady)
-    {
-        EEPROM.begin(OTA_RB_NVS_SIZE);
-        _otaRollbackReady = true;
-    }
-    OtaRbNvs nvs;
-    memset(&nvs, 0, sizeof(nvs));
-    nvs.magic = OTA_RB_NVS_MAGIC;
-    strncpy(nvs.last_ok, _otaLastOkVersion.c_str(), sizeof(nvs.last_ok) - 1);
-    nvs.last_ok[sizeof(nvs.last_ok) - 1] = '\0';
-    nvs.pending = _otaRollbackPending ? 1 : 0;
-    nvs.boot_cnt = (uint8_t)_otaRollbackBootCount;
-    EEPROM.put(0, nvs);
-    EEPROM.commit();
 #endif
 }
 
@@ -1357,175 +1878,11 @@ bool Firmngin::isPlatformSupported()
     return PLATFORM_SUPPORTED;
 }
 
-void Firmngin::_stopMqttTransport()
-{
-#if defined(ESP8266) || defined(ESP32)
-    if (_mqttNoTls)
-        _plainWifiClient.stop();
-    else
-        _wifiClient.stop();
-#endif
-}
-
-bool Firmngin::connectServer()
-{
-    if (!_securityReady)
-    {
-        Serial.println("ERROR: secure initialization is incomplete; MQTT connection blocked");
-        return false;
-    }
-    setupLWT();
-
-    int retryCount = 0;
-    while (!_mqttClient.connected() && retryCount < maxRetryMQTT)
-    {
-        unsigned long now = millis();
-        if (now - _lastMQTTAttempt >= _delayRetryMQTT)
-        {
-            _lastMQTTAttempt = now;
-            Serial.print("Connecting to server...");
-            Serial.print(" (attempt ");
-            Serial.print(retryCount + 1);
-            Serial.println(")");
-
-            String willPath = "/d/" + String(_deviceId) + "/lwt";
-            String willMessage = "0";
-
-            _mqttClient.disconnect();
-            _stopMqttTransport();
-            delay(100);
-            bool connected = _mqttClient.connect(_deviceId, _deviceId, _deviceKey, willPath.c_str(), 1, true, willMessage.c_str());
-
-            if (connected)
-            {
-                char topicBuf[64];
-                const int qosState = 0;
-                const int qosPayment = 1;
-
-                snprintf(topicBuf, sizeof(topicBuf), "/c/%s/pm", _deviceId);
-                _mqttClient.subscribe(topicBuf, qosPayment);
-                snprintf(topicBuf, sizeof(topicBuf), "/c/%s/dp", _deviceId);
-                _mqttClient.subscribe(topicBuf, qosPayment);
-                snprintf(topicBuf, sizeof(topicBuf), "/c/%s/pp", _deviceId);
-                _mqttClient.subscribe(topicBuf, qosPayment);
-                snprintf(topicBuf, sizeof(topicBuf), "/c/%s/pr", _deviceId);
-                _mqttClient.subscribe(topicBuf, qosPayment);
-                snprintf(topicBuf, sizeof(topicBuf), "/c/%s/mi", _deviceId);
-                _mqttClient.subscribe(topicBuf, qosState);
-                snprintf(topicBuf, sizeof(topicBuf), "/c/%s/ds", _deviceId);
-                _mqttClient.subscribe(topicBuf, qosState);
-                snprintf(topicBuf, sizeof(topicBuf), "/c/%s/init", _deviceId);
-                _mqttClient.subscribe(topicBuf, qosState);
-                snprintf(topicBuf, sizeof(topicBuf), "/c/%s/dpin", _deviceId);
-                _mqttClient.subscribe(topicBuf, qosState);
-                snprintf(topicBuf, sizeof(topicBuf), "/c/%s/vr", _deviceId);
-                _mqttClient.subscribe(topicBuf, qosState);
-                snprintf(topicBuf, sizeof(topicBuf), "/c/%s/ur", _deviceId);
-                _mqttClient.subscribe(topicBuf, qosState);
-                snprintf(topicBuf, sizeof(topicBuf), "/c/%s/le", _deviceId);
-                _mqttClient.subscribe(topicBuf, qosState);
-                snprintf(topicBuf, sizeof(topicBuf), "/c/%s/nl", _deviceId);
-                _mqttClient.subscribe(topicBuf, qosState);
-                snprintf(topicBuf, sizeof(topicBuf), "/c/%s/mop", _deviceId);
-                _mqttClient.subscribe(topicBuf, qosState);
-                snprintf(topicBuf, sizeof(topicBuf), "/c/%s/mpp", _deviceId);
-                _mqttClient.subscribe(topicBuf, qosState);
-                snprintf(topicBuf, sizeof(topicBuf), "/c/%s/moa", _deviceId);
-                _mqttClient.subscribe(topicBuf, qosState);
-                snprintf(topicBuf, sizeof(topicBuf), "/c/%s/moe", _deviceId);
-                _mqttClient.subscribe(topicBuf, qosState);
-                snprintf(topicBuf, sizeof(topicBuf), "/c/%s/mos", _deviceId);
-                _mqttClient.subscribe(topicBuf, qosState);
-                snprintf(topicBuf, sizeof(topicBuf), "/c/%s/pi", _deviceId);
-                _mqttClient.subscribe(topicBuf, qosState);
-                snprintf(topicBuf, sizeof(topicBuf), "/c/%s/ot/trg", _deviceId);
-                _mqttClient.subscribe(topicBuf, qosState);
-                snprintf(topicBuf, sizeof(topicBuf), "/d/%s/rs/+", _deviceId);
-                _mqttClient.subscribe(topicBuf, qosState);
-
-                _mqttClient.publish(willPath.c_str(), "1", true);
-                if (_debug)
-                    Serial.println("Successfully connected");
-                syncFirmwareInfo();
-                requestInit();
-
-                if (_queueEnabled && _queueFileReady && _queueCount > 0)
-                {
-                    _lastQueueDrainMs = 0;
-                    _drainQueue();
-                }
-
-                return true;
-            }
-            else
-            {
-                int mqttState = _mqttClient.state();
-                Serial.print("Failed, rc=");
-                Serial.print(mqttState);
-                if (_debug)
-                {
-                    Serial.print(" (");
-                    switch (mqttState)
-                    {
-                    case -4:
-                        Serial.print("MQTT_CONNECTION_TIMEOUT");
-                        break;
-                    case -3:
-                        Serial.print("MQTT_CONNECTION_LOST");
-                        break;
-                    case -2:
-                        Serial.print("MQTT_CONNECT_FAILED - TLS/certificate error");
-                        break;
-                    case -1:
-                        Serial.print("MQTT_DISCONNECTED");
-                        break;
-                    case 1:
-                        Serial.print("MQTT_CONNECT_BAD_PROTOCOL");
-                        break;
-                    case 2:
-                        Serial.print("MQTT_CONNECT_BAD_CLIENT_ID");
-                        break;
-                    case 3:
-                        Serial.print("MQTT_CONNECT_UNAVAILABLE");
-                        break;
-                    case 4:
-                        Serial.print("MQTT_CONNECT_BAD_CREDENTIALS");
-                        break;
-                    case 5:
-                        Serial.print("MQTT_CONNECT_UNAUTHORIZED");
-                        break;
-                    default:
-                        Serial.print("UNKNOWN");
-                        break;
-                    }
-                    Serial.print(")");
-                }
-                Serial.println();
-                retryCount++;
-            }
-        }
-    }
-
-    if (!_mqttClient.connected())
-    {
-        _Debug("Server connection failed, will retry on next loop");
-    }
-
-    return false;
-}
 
 static void fillE2EENonce(uint8_t *iv, size_t len)
 {
 #if defined(ESP32)
     esp_fill_random(iv, len);
-#elif defined(ESP8266)
-    if (!os_get_random(iv, len))
-    {
-        for (size_t i = 0; i < len; i++)
-        {
-            iv[i] = (uint8_t)random(0, 256);
-        }
-    }
 #else
     for (size_t i = 0; i < len; i++)
     {
@@ -1566,21 +1923,6 @@ static bool encryptE2EE(const uint8_t *plaintext, size_t plainLen, const uint8_t
     *packetLen = 12 + plainLen + 16;
     return true;
 
-#elif defined(ESP8266)
-    if (keyLen != 32)
-        return false;
-
-    ChaChaPoly chacha;
-    if (!chacha.setKey(key, 32))
-        return false;
-    if (!chacha.setIV(iv, 12))
-        return false;
-
-    chacha.encrypt(ciphertext, plaintext, plainLen);
-    chacha.computeTag(tag, 16);
-
-    *packetLen = 12 + plainLen + 16;
-    return true;
 #else
     (void)plaintext;
     (void)plainLen;
@@ -1591,7 +1933,7 @@ static bool encryptE2EE(const uint8_t *plaintext, size_t plainLen, const uint8_t
 #endif
 }
 
-static bool decryptE2EE(const uint8_t *packet, size_t packetLen, const uint8_t *key, size_t keyLen, uint8_t *plaintext, size_t *plainLen)
+static bool decryptE2EE(const uint8_t *packet, size_t packetLen, const uint8_t *key, size_t keyLen, uint8_t *plaintext, size_t plainCapacity, size_t *plainLen)
 {
     *plainLen = 0;
 
@@ -1601,6 +1943,8 @@ static bool decryptE2EE(const uint8_t *packet, size_t packetLen, const uint8_t *
 
     const uint8_t *iv = packet;
     size_t cipherLen = packetLen - 12 - 16;
+    if (cipherLen > plainCapacity)
+        return false;
     const uint8_t *ciphertext = packet + 12;
     const uint8_t *tag = packet + 12 + cipherLen;
 
@@ -1652,29 +1996,6 @@ static bool decryptE2EE(const uint8_t *packet, size_t packetLen, const uint8_t *
 
     return false;
 
-#elif defined(ESP8266)
-    if (keyLen != 32)
-        return false;
-
-    ChaChaPoly chacha;
-    if (!chacha.setKey(key, 32))
-        return false;
-    if (!chacha.setIV(iv, 12))
-        return false;
-
-    chacha.decrypt(plaintext, ciphertext, cipherLen);
-
-    uint8_t computedTag[16];
-    chacha.computeTag(computedTag, 16);
-
-    if (!chacha.checkTag(tag, 16))
-    {
-        memset(plaintext, 0, cipherLen);
-        return false;
-    }
-
-    *plainLen = cipherLen;
-    return true;
 #else
     (void)iv;
     (void)ciphertext;
@@ -1697,10 +2018,17 @@ void Firmngin::mqttCallback(char *path, byte *payload, unsigned int length)
     }
     else
     {
-        uint8_t plainBuf[512];
+        // Match the server transport bound without putting a large QR buffer on
+        // the callback stack. decryptE2EE also receives the actual capacity.
+        if (length < 28 || length > 4096)
+            return;
+        const size_t plainCapacity = length - 28;
+        std::unique_ptr<uint8_t[]> plainBuf(new (std::nothrow) uint8_t[plainCapacity ? plainCapacity : 1]);
+        if (!plainBuf)
+            return;
         size_t plainLen = 0;
 
-        if (decryptE2EE(payload, length, _e2eeKeyBytes, _e2eeKeyLen, plainBuf, &plainLen))
+        if (decryptE2EE(payload, length, _e2eeKeyBytes, _e2eeKeyLen, plainBuf.get(), plainCapacity, &plainLen))
         {
             payloadStr.reserve(plainLen);
             for (size_t i = 0; i < plainLen; i++)
@@ -1791,6 +2119,21 @@ void Firmngin::mqttCallback(char *path, byte *payload, unsigned int length)
         }
     }
 
+    if (stateType == "qr")
+    {
+        TerminalQR qr(payloadStr);
+        if (qr.isValid())
+        {
+            for (const auto &callback : _terminalQRCallbacks)
+                if (callback)
+                    callback(qr);
+            if (qr.isFailed())
+                for (const auto &callback : _terminalPaymentFailedCallbacks)
+                    if (callback)
+                        callback(qr);
+        }
+    }
+
     if (stateType == "dp" && (_dispenseCallback || !_dispenseCallbacks.empty()))
     {
         Dispenses d(payloadStr);
@@ -1864,6 +2207,8 @@ void Firmngin::mqttCallback(char *path, byte *payload, unsigned int length)
         Inits i(payloadStr);
         if (i.isValid())
         {
+            _deviceInitReceived = true;
+            _applyAudioStreamUrl(i.audioStreamUrl());
             setMerchantStatus(i.merchantStatus());
             if (i.isOnActiveService() && i.activeOrderId().length() > 0)
             {
@@ -1887,6 +2232,8 @@ void Firmngin::mqttCallback(char *path, byte *payload, unsigned int length)
         Inits i(payloadStr);
         if (i.isValid())
         {
+            _deviceInitReceived = true;
+            _applyAudioStreamUrl(i.audioStreamUrl());
             setMerchantStatus(i.merchantStatus());
             if (i.isOnActiveService() && i.activeOrderId().length() > 0)
             {
@@ -1899,7 +2246,7 @@ void Firmngin::mqttCallback(char *path, byte *payload, unsigned int length)
     if (stateType == "pi")
     {
         String pongPath = "/d/" + String(_deviceId) + "/" + PATH_PONG;
-        _mqttClient.publish(pongPath.c_str(), payloadStr.c_str());
+        _mqttPublish(pongPath.c_str(), reinterpret_cast<const uint8_t *>(payloadStr.c_str()), payloadStr.length(), false);
     }
 
     if (pathStr.indexOf("/ot/trg") >= 0)
@@ -1978,14 +2325,14 @@ bool Firmngin::publishPayload(const char *path, const char *payload, bool retain
 {
     if (!_e2eeEnabled || _e2eeKeyLen == 0)
     {
-        // E2EE disabled — publish plaintext directly
-        if (!_mqttClient.connected())
+        // E2EE disabled — send plaintext directly
+        if (!_mqttIsConnected())
         {
             if (_queueEnabled)
                 return _enqueueToQueue(path, (const uint8_t *)payload, strlen(payload), retained);
             return false;
         }
-        bool published = _mqttClient.publish(path, payload, retained);
+        bool published = _mqttPublish(path, reinterpret_cast<const uint8_t *>(payload), strlen(payload), retained);
         if (!published && _queueEnabled)
             return _enqueueToQueue(path, (const uint8_t *)payload, strlen(payload), retained);
         return published;
@@ -2000,14 +2347,14 @@ bool Firmngin::publishPayload(const char *path, const char *payload, bool retain
     if (!encryptE2EE((const uint8_t *)payload, payloadLen, _e2eeKeyBytes, _e2eeKeyLen, encrypted, &encryptedLen))
         return false;
 
-    if (!_mqttClient.connected())
+    if (!_mqttIsConnected())
     {
         if (_queueEnabled)
             return _enqueueToQueue(path, encrypted, encryptedLen, retained);
         return false;
     }
 
-    bool published = _mqttClient.publish(path, encrypted, encryptedLen, retained);
+    bool published = _mqttPublish(path, encrypted, encryptedLen, retained);
     if (!published && _queueEnabled)
     {
         return _enqueueToQueue(path, encrypted, encryptedLen, retained);
@@ -2193,6 +2540,34 @@ bool Firmngin::endSession()
     return sent;
 }
 
+// Returns nullptr once the request is sent, otherwise the reason it was not:
+// a short literal the sketch can print as-is.
+const char *Firmngin::setAmountTerminalQR(const String &amount)
+{
+    if (amount.length() == 0)
+        return "amount is empty";
+    for (size_t i = 0; i < amount.length(); ++i)
+    {
+        if (amount[i] < '0' || amount[i] > '9')
+            return "digits only";
+    }
+    _terminalRequestSeq++;
+    String requestId = String("dev-") + String(getTimestampMillis()) + "-" + String(_terminalRequestSeq);
+    char buf[384];
+    firmngin_json::Builder b(buf, sizeof(buf));
+    b.reset();
+    if (!b.add("rid", requestId.c_str()) || !b.add("amt", amount.c_str()) || b.full())
+        return "amount too long";
+    String topic = String("/d/") + _deviceId + "/qr";
+    return publishPayload(topic.c_str(), b.build()) ? nullptr : "Failed to sent message";
+}
+
+bool Firmngin::cancelTerminalQR()
+{
+    String topic = String("/d/") + _deviceId + "/a/qr-cancel";
+    return publishPayload(topic.c_str(), "");
+}
+
 bool Firmngin::requestInit()
 {
     char buf[64];
@@ -2259,7 +2634,7 @@ void Firmngin::setFirmwareInfo(const char *version, const char *targetBoard, con
 
     // Auto-sync to server if already connected so the versioning_firmware
     // entity is updated immediately without waiting for a reconnect.
-    if (_mqttClient.connected())
+    if (_mqttIsConnected())
     {
         syncFirmwareInfo();
     }
@@ -2271,7 +2646,7 @@ void Firmngin::setFirmwareInfo(const char *version)
         _firmwareVersion = version;
 
     // Auto-sync to server if already connected.
-    if (_mqttClient.connected())
+    if (_mqttIsConnected())
     {
         syncFirmwareInfo();
     }
@@ -2294,7 +2669,7 @@ const char *Firmngin::getFirmwareTargetModel()
 
 bool Firmngin::syncFirmwareInfo()
 {
-    if (!_mqttClient.connected())
+    if (!_mqttIsConnected())
     {
         if (_debug)
         {
@@ -2354,54 +2729,6 @@ static String hmacSHA256(const char *key, const char *message)
     return String(hex);
 }
 
-#elif defined(ESP8266)
-
-static String hmacSHA256(const char *key, const char *message)
-{
-    uint8_t keyBlock[64];
-    memset(keyBlock, 0, sizeof(keyBlock));
-    size_t keyLen = strlen(key);
-    if (keyLen > 64)
-    {
-        br_sha256_context sha;
-        br_sha256_init(&sha);
-        br_sha256_update(&sha, key, keyLen);
-        br_sha256_out(&sha, keyBlock);
-        keyLen = 32;
-    }
-    else
-    {
-        memcpy(keyBlock, key, keyLen);
-    }
-
-    uint8_t oKeyPad[64];
-    uint8_t iKeyPad[64];
-    for (int i = 0; i < 64; i++)
-    {
-        oKeyPad[i] = keyBlock[i] ^ 0x5c;
-        iKeyPad[i] = keyBlock[i] ^ 0x36;
-    }
-
-    br_sha256_context sha;
-    uint8_t innerHash[32];
-    br_sha256_init(&sha);
-    br_sha256_update(&sha, iKeyPad, 64);
-    br_sha256_update(&sha, message, strlen(message));
-    br_sha256_out(&sha, innerHash);
-
-    uint8_t hmacResult[32];
-    br_sha256_init(&sha);
-    br_sha256_update(&sha, oKeyPad, 64);
-    br_sha256_update(&sha, innerHash, 32);
-    br_sha256_out(&sha, hmacResult);
-
-    char hex[65];
-    for (int i = 0; i < 32; i++)
-        sprintf(hex + (i * 2), "%02x", hmacResult[i]);
-    hex[64] = '\0';
-    return String(hex);
-}
-
 #endif
 
 #if 0
@@ -2436,7 +2763,7 @@ bool Firmngin::otaHTTPGet(const char *path, const char *queryParams, String &res
     String message = String(_deviceId) + "." + String(ts) + ".GET." + fullPath;
     const char *activeServiceCA = _activeServiceCACert();
 
-#if defined(ESP8266) || defined(ESP32)
+#if defined(ESP32)
     HTTPClient http;
 #if defined(ESP32)
     WiFiClientSecure otaClient;
@@ -2457,18 +2784,6 @@ bool Firmngin::otaHTTPGet(const char *path, const char *queryParams, String &res
         otaClient.setCertificate(_clientCert);
     if (_privateKey != nullptr)
         otaClient.setPrivateKey(_privateKey);
-#elif defined(ESP8266)
-    BearSSL::WiFiClientSecure otaClient;
-    otaClient.setBufferSizes(512, 512);
-    if (_clientCertList != nullptr && _clientPrivKey != nullptr)
-        otaClient.setClientRSACert(_clientCertList, _clientPrivKey);
-    if (activeServiceCA == nullptr)
-    {
-        publishOTAStatus("failed", "Service CA certificate is not configured");
-        return false;
-    }
-    BearSSL::X509List serviceCATrustAnchors(activeServiceCA);
-    otaClient.setTrustAnchors(&serviceCATrustAnchors);
 #endif
     if (!http.begin(otaClient, url))
     {
@@ -2588,7 +2903,7 @@ bool Firmngin::performOTA(const char *manifestUrl)
 
     String downloadPath = String("/firmware/") + _otaFirmwareID + "/download";
 
-#if defined(ESP8266) || defined(ESP32)
+#if defined(ESP32)
     String url = _otaBaseUrl + downloadPath;
     const char *activeServiceCA = _activeServiceCACert();
 #if defined(ESP32)
@@ -2611,23 +2926,6 @@ bool Firmngin::performOTA(const char *manifestUrl)
         _otaWifiClient.setCertificate(_clientCert);
     if (_privateKey != nullptr)
         _otaWifiClient.setPrivateKey(_privateKey);
-#elif defined(ESP8266)
-    _otaWifiClient.setBufferSizes(512, 512);
-    if (_clientCertList != nullptr && _clientPrivKey != nullptr)
-        _otaWifiClient.setClientRSACert(_clientCertList, _clientPrivKey);
-    if (activeServiceCA == nullptr)
-    {
-        _otaAsyncState = OTA_ASYNC_IDLE;
-        publishOTAStatus("failed", "Service CA certificate is not configured");
-        _otaFirmwareID = "";
-        return false;
-    }
-    if (_otaTrustAnchors != nullptr)
-    {
-        delete _otaTrustAnchors;
-    }
-    _otaTrustAnchors = new BearSSL::X509List(activeServiceCA);
-    _otaWifiClient.setTrustAnchors(_otaTrustAnchors);
 #endif
     if (!_otaHttp.begin(_otaWifiClient, url))
     {
@@ -2684,8 +2982,6 @@ bool Firmngin::performOTA(const char *manifestUrl)
     mbedtls_md_init(&_otaSha256Ctx);
     mbedtls_md_setup(&_otaSha256Ctx, mbedtls_md_info_from_type(MBEDTLS_MD_SHA256), 0);
     mbedtls_md_starts(&_otaSha256Ctx);
-#elif defined(ESP8266)
-    br_sha256_init(&_otaSha256Ctx);
 #endif
 
     if (_otaContentLength > 0 && !Update.begin(_otaContentLength))
@@ -2746,8 +3042,6 @@ void Firmngin::_processOTA()
 
 #if defined(ESP32)
         mbedtls_md_update(&_otaSha256Ctx, _otaBuffer, readLen);
-#elif defined(ESP8266)
-        br_sha256_update(&_otaSha256Ctx, _otaBuffer, readLen);
 #endif
 
         if (_otaContentLength > 0)
@@ -2861,12 +3155,9 @@ void Firmngin::_processOTA()
         uint8_t computedHash[32];
         mbedtls_md_finish(&_otaSha256Ctx, computedHash);
         mbedtls_md_free(&_otaSha256Ctx);
-#elif defined(ESP8266)
-        uint8_t computedHash[32];
-        br_sha256_out(&_otaSha256Ctx, computedHash);
 #endif
 
-#if defined(ESP32) || defined(ESP8266)
+#if defined(ESP32)
         char computedHex[65];
         for (int i = 0; i < 32; i++)
             sprintf(computedHex + (i * 2), "%02x", computedHash[i]);
@@ -3044,6 +3335,312 @@ bool Firmngin::publishOTAStatus(const char *status, const char *message)
 }
 #endif
 
+// ==================== AUDIO STREAM ====================
+#if defined(ESP32)
+void Firmngin::_audioWsEventHandler(void *handlerArgs, esp_event_base_t, int32_t eventId, void *eventData)
+{
+    Firmngin *self = static_cast<Firmngin *>(handlerArgs);
+    if (self == nullptr)
+        return;
+
+    switch (eventId)
+    {
+    case WEBSOCKET_EVENT_DATA:
+    {
+        esp_websocket_event_data_t *data = static_cast<esp_websocket_event_data_t *>(eventData);
+        if (data == nullptr || data->data_len <= 0)
+            break;
+        if (data->op_code == 0x01)
+        {
+            if (data->payload_offset != 0)
+                break;
+            char entityKey[AUDIO_DETAIL_MAX];
+            FirmnginAudioEvent event = firmngin_audio_control_event(
+                data->data_ptr, static_cast<size_t>(data->data_len), entityKey, sizeof(entityKey));
+            if (event == AUDIO_NONE)
+                break;
+            if (event == AUDIO_START)
+            {
+                // Binary frames are only legal inside a started clip. Gating on this
+                // flag is what makes a stop a stop: frames still sitting in TCP and
+                // socket buffers after audio.flush must not re-enter the ring and
+                // resurrect the clip the user just stopped.
+                self->_audioStreaming = true;
+                self->_audioEndPending = false;
+                self->_audioEndDetail[0] = '\0';
+            }
+            if (event == AUDIO_END)
+            {
+                self->_audioStreaming = false;
+                self->_audioPcmAccumLen = 0;
+                self->_audioEndPending = true;
+                if (entityKey[0] != '\0')
+                {
+                    strncpy(self->_audioEndDetail, entityKey, sizeof(self->_audioEndDetail) - 1);
+                    self->_audioEndDetail[sizeof(self->_audioEndDetail) - 1] = '\0';
+                }
+            }
+            if (event == AUDIO_FLUSH)
+                self->_abortAudioClip();
+            if (event == AUDIO_INPUT_ERROR)
+            {
+                self->_audioInputCancelRequested = true;
+                self->_audioInputStopRequested = true;
+            }
+            self->_notifyAudioEvent(event, nullptr, entityKey[0] != '\0' ? entityKey : nullptr);
+            break;
+        }
+        if (data->op_code == 0x02 && self->_audioRx != nullptr && self->_audioStreaming)
+        {
+            if (data->payload_len != AUDIO_FRAME_BYTES)
+            {
+                self->_audioPcmAccumLen = 0;
+                self->_notifyAudioEvent(AUDIO_ERROR, "audio PCM frame must be 640 bytes");
+                break;
+            }
+            if (self->_audioPcmAccumLen + data->data_len > sizeof(self->_audioPcmAccum))
+            {
+                self->_audioPcmAccumLen = 0;
+                self->_notifyAudioEvent(AUDIO_ERROR, "audio PCM reassembly overflow");
+                break;
+            }
+            memcpy(self->_audioPcmAccum + self->_audioPcmAccumLen, data->data_ptr, data->data_len);
+            self->_audioPcmAccumLen += data->data_len;
+
+            const uint32_t flushGen = self->_audioFlushGen;
+            while (self->_audioPcmAccumLen >= AUDIO_FRAME_BYTES)
+            {
+                if (flushGen != self->_audioFlushGen)
+                {
+                    self->_audioPcmAccumLen = 0;
+                    break;
+                }
+                if (!self->_enqueueAudioFrame(self->_audioPcmAccum, flushGen))
+                {
+                    // Ring full: drop this frame and return to the event loop so
+                    // audio.flush/stop can be read. Do not raise AUDIO_ERROR — with
+                    // a paced gateway this is rare; treating it as an error made
+                    // every eager flood look like a failed clip.
+                    self->_audioPcmAccumLen -= AUDIO_FRAME_BYTES;
+                    if (self->_audioPcmAccumLen > 0)
+                        memmove(self->_audioPcmAccum,
+                                self->_audioPcmAccum + AUDIO_FRAME_BYTES,
+                                self->_audioPcmAccumLen);
+                    break;
+                }
+                self->_audioPcmAccumLen -= AUDIO_FRAME_BYTES;
+                if (self->_audioPcmAccumLen > 0)
+                    memmove(self->_audioPcmAccum,
+                            self->_audioPcmAccum + AUDIO_FRAME_BYTES,
+                            self->_audioPcmAccumLen);
+            }
+        }
+        break;
+    }
+    case WEBSOCKET_EVENT_DISCONNECTED:
+        self->_abortAudioClip();
+        self->_audioInputCancelRequested = true;
+        self->_audioInputStopRequested = true;
+        if (self->_audioKeepAlive)
+        {
+            self->_audioReconnectPending = true;
+            self->_audioReconnectAtMs = millis() + 2000;
+        }
+        self->_notifyAudioEvent(AUDIO_DISCONNECTED, "audio stream disconnected");
+        break;
+    case WEBSOCKET_EVENT_ERROR:
+        self->_audioInputCancelRequested = true;
+        self->_audioInputStopRequested = true;
+        if (self->_audioKeepAlive)
+        {
+            self->_audioReconnectPending = true;
+            self->_audioReconnectAtMs = millis() + 2000;
+        }
+        self->_notifyAudioEvent(AUDIO_ERROR, "audio stream error");
+        break;
+    default:
+        break;
+    }
+}
+#endif
+
+void Firmngin::_notifyAudioEvent(FirmnginAudioEvent event, const char *detail, const char *entityKey)
+{
+#if defined(ESP32)
+    if (_audioEvents != nullptr)
+    {
+        FirmnginAudioEventMessage message = {};
+        message.event = event;
+        if (detail != nullptr)
+            strncpy(message.detail, detail, sizeof(message.detail) - 1);
+        if (entityKey != nullptr)
+            strncpy(message.entity_key, entityKey, sizeof(message.entity_key) - 1);
+        if (xQueueSend(_audioEvents, &message, 0) == pdTRUE)
+            return;
+    }
+#endif
+    FirmnginAudioEventMessage direct = {};
+    direct.event = event;
+    if (detail != nullptr)
+        strncpy(direct.detail, detail, sizeof(direct.detail) - 1);
+    if (entityKey != nullptr)
+        strncpy(direct.entity_key, entityKey, sizeof(direct.entity_key) - 1);
+    _dispatchAudioEntity(direct);
+    if (_audioEventCallback)
+    {
+        _audioEventCallback(event, detail);
+        return;
+    }
+    if (_audioEntityCallbacks.empty() && event == AUDIO_ERROR)
+        Serial.printf("[firmngin] audio error: %s\n", detail != nullptr ? detail : "unknown");
+}
+
+void Firmngin::_processAudio()
+{
+#if !defined(ESP32)
+    return;
+#else
+    _tryAutoConnectAudio();
+
+    if (_audioReconnectPending && _audioKeepAlive && _hasAudioInterfaceConfigured() &&
+        static_cast<long>(millis() - _audioReconnectAtMs) >= 0)
+    {
+        _audioReconnectPending = false;
+        _stopAudioWs();
+        if (!_startAudioWsClient())
+        {
+            _audioReconnectPending = true;
+            _audioReconnectAtMs = millis() + 5000;
+        }
+    }
+
+    if (_audioEvents != nullptr)
+    {
+        FirmnginAudioEventMessage message;
+        while (xQueueReceive(_audioEvents, &message, 0) == pdTRUE)
+        {
+            if ((message.event == AUDIO_FLUSH || message.event == AUDIO_DISCONNECTED) &&
+                _audioUsesBuiltinSink)
+            {
+                FirmnginI2s *sink = _activeSink();
+                // A flush before the first clip has no selected speaker yet. That is
+                // a valid no-op; only a selected sink that fails to flush is an error.
+                if (sink != nullptr && !sink->flush())
+                    _notifyAudioEvent(AUDIO_ERROR, "audio I2S flush failed");
+            }
+
+            if (message.event == AUDIO_START)
+            {
+                _activeSinkKey = message.entity_key;
+                if (_audioChunkCallback == nullptr ||
+                    (_audioUsesBuiltinSink && _activeSink() == nullptr))
+                {
+                    // Stop accepting this clip immediately. Binary frames already
+                    // queued behind audio.start are discarded by _abortAudioClip().
+                    _abortAudioClip();
+                    _activeSinkKey = "";
+                    _notifyAudioEvent(AUDIO_ERROR, "audio output entity is not registered",
+                                      message.entity_key[0] != '\0' ? message.entity_key : nullptr);
+                    continue;
+                }
+            }
+            else if (message.event == AUDIO_READY)
+                _activeSinkKey = "";
+            else if (message.event == AUDIO_FLUSH ||
+                     message.event == AUDIO_DISCONNECTED)
+                _activeSinkKey = "";
+
+            _dispatchAudioEntity(message);
+
+            // Defer user AUDIO_END until the ring has drained at full level.
+            if (message.event == AUDIO_END)
+            {
+                const char *endTag = message.detail[0] != '\0' ? message.detail : message.entity_key;
+                if (endTag[0] != '\0')
+                {
+                    strncpy(_audioEndDetail, endTag, sizeof(_audioEndDetail) - 1);
+                    _audioEndDetail[sizeof(_audioEndDetail) - 1] = '\0';
+                }
+                _audioEndPending = true;
+                continue;
+            }
+            if (message.event == AUDIO_FLUSH || message.event == AUDIO_START ||
+                message.event == AUDIO_DISCONNECTED)
+            {
+                _audioEndPending = false;
+                _audioEndDetail[0] = '\0';
+            }
+
+            const char *eventDetail = message.detail[0] != '\0'
+                                          ? message.detail
+                                          : (message.entity_key[0] != '\0' ? message.entity_key : nullptr);
+            if (_audioEventCallback)
+                _audioEventCallback(message.event, eventDetail);
+            else if (_audioEntityCallbacks.empty() && message.event == AUDIO_ERROR)
+                Serial.printf("[firmngin] audio error: %s\n",
+                              eventDetail != nullptr ? eventDetail : "unknown");
+        }
+    }
+
+    if (_audioChunkCallback == nullptr || _audioRx == nullptr)
+        return;
+
+    static uint8_t mono[AUDIO_FRAME_BYTES];
+    static uint8_t stereo[AUDIO_PLAYBACK_FRAME_BYTES];
+    const size_t queuedFrames =
+        xStreamBufferBytesAvailable(_audioRx) / AUDIO_FRAME_BYTES;
+    uint8_t maxPasses = _audioFramesPerLoop;
+    // Drain faster when ending or the ring is filling so loop() jitter does not
+    // underrun I2S or leave a long tail after audio.end.
+    if (_audioEndPending || queuedFrames > (_audioBufferFrames / 2))
+        maxPasses = _audioBufferFrames;
+
+    for (uint8_t pass = 0; pass < maxPasses; pass++)
+    {
+        if (xStreamBufferBytesAvailable(_audioRx) < AUDIO_FRAME_BYTES)
+            break;
+        const bool finalFrame = _audioEndPending &&
+                                xStreamBufferBytesAvailable(_audioRx) == AUDIO_FRAME_BYTES;
+        if (xStreamBufferReceive(_audioRx, mono, sizeof(mono), 0) != sizeof(mono))
+        {
+            xStreamBufferReset(_audioRx);
+            return;
+        }
+        if (finalFrame)
+        {
+            uint32_t fadePos = 0;
+            firmngin_audio_fade_out_s16le(mono, sizeof(mono), &fadePos,
+                                          AUDIO_SAMPLES_PER_FRAME);
+        }
+        if (firmngin_audio_mono_s16le_to_stereo(mono, sizeof(mono), stereo, sizeof(stereo)) !=
+            sizeof(stereo))
+        {
+            xStreamBufferReset(_audioRx);
+            _notifyAudioEvent(AUDIO_ERROR, "audio PCM conversion failed");
+            return;
+        }
+        if (!_audioChunkCallback(stereo, sizeof(stereo)))
+        {
+            xStreamBufferReset(_audioRx);
+            return;
+        }
+    }
+
+    if (_audioEndPending && xStreamBufferBytesAvailable(_audioRx) < AUDIO_FRAME_BYTES)
+    {
+        _audioEndPending = false;
+        static uint8_t silence[AUDIO_PLAYBACK_FRAME_BYTES];
+        memset(silence, 0, sizeof(silence));
+        for (uint8_t i = 0; i < FIRMNGIN_AUDIO_TAIL_SILENCE_FRAMES; i++)
+            (void)_audioChunkCallback(silence, sizeof(silence));
+        if (_audioEventCallback)
+            _audioEventCallback(AUDIO_END,
+                                _audioEndDetail[0] != '\0' ? _audioEndDetail : nullptr);
+        _audioEndDetail[0] = '\0';
+    }
+#endif
+}
+
 // ==================== CAMERA IMAGE UPLOAD ====================
 
 bool Firmngin::uploadImage(const char *entityKey, uint8_t *data, size_t len, const char *contentType,
@@ -3072,7 +3669,7 @@ bool Firmngin::uploadImage(const char *entityKey, uint8_t *data, size_t len, con
         Serial.println(contentType);
     }
 
-#if defined(ESP8266) || defined(ESP32)
+#if defined(ESP32)
     String url = _apiBaseUrl + "/device-camera/upload";
 
     unsigned long ts = time(nullptr);
@@ -3102,19 +3699,6 @@ bool Firmngin::uploadImage(const char *entityKey, uint8_t *data, size_t len, con
         cameraClient.setCertificate(_clientCert);
     if (_privateKey != nullptr)
         cameraClient.setPrivateKey(_privateKey);
-#elif defined(ESP8266)
-    BearSSL::WiFiClientSecure cameraClient;
-    cameraClient.setBufferSizes(512, 512);
-    if (_clientCertList != nullptr && _clientPrivKey != nullptr)
-        cameraClient.setClientRSACert(_clientCertList, _clientPrivKey);
-    if (activeServiceCA == nullptr)
-    {
-        if (onError)
-            onError(0, "service CA certificate not configured");
-        return false;
-    }
-    BearSSL::X509List serviceCATrustAnchors(activeServiceCA);
-    cameraClient.setTrustAnchors(&serviceCATrustAnchors);
 #endif
 
     if (!http.begin(cameraClient, url))
@@ -3430,7 +4014,7 @@ void Firmngin::clearQueue()
 
 bool Firmngin::_initQueue()
 {
-#if defined(ESP32) || defined(ESP8266)
+#if defined(ESP32)
     if (_queueFileReady)
         return true;
 
@@ -3483,7 +4067,7 @@ bool Firmngin::_initQueue()
 void Firmngin::_shutdownQueue()
 {
     _queueFileReady = false;
-#if defined(ESP32) || defined(ESP8266)
+#if defined(ESP32)
     LittleFS.end();
 #endif
 }
@@ -3494,7 +4078,7 @@ void Firmngin::_resetQueueFile()
     _queueTail = 0;
     _queueCount = 0;
 
-#if defined(ESP32) || defined(ESP8266)
+#if defined(ESP32)
     File f = LittleFS.open(FIRMNGIN_QUEUE_FILE_NAME, "w");
     if (!f)
         return;
@@ -3517,7 +4101,7 @@ void Firmngin::_resetQueueFile()
 
 bool Firmngin::_readQueueHeader(uint16_t &head, uint16_t &tail, uint16_t &count)
 {
-#if defined(ESP32) || defined(ESP8266)
+#if defined(ESP32)
     File f = LittleFS.open(FIRMNGIN_QUEUE_FILE_NAME, "r");
     if (!f || f.size() < FIRMNGIN_QUEUE_HEADER_SIZE)
     {
@@ -3556,7 +4140,7 @@ bool Firmngin::_readQueueHeader(uint16_t &head, uint16_t &tail, uint16_t &count)
 
 bool Firmngin::_writeQueueHeader(uint16_t head, uint16_t tail, uint16_t count)
 {
-#if defined(ESP32) || defined(ESP8266)
+#if defined(ESP32)
     File f = LittleFS.open(FIRMNGIN_QUEUE_FILE_NAME, "r+");
     if (!f)
         return false;
@@ -3595,7 +4179,7 @@ bool Firmngin::_writeQueueHeader(uint16_t head, uint16_t tail, uint16_t count)
 
 bool Firmngin::_enqueueToQueue(const char *topic, const uint8_t *payload, size_t payloadLen, bool retained)
 {
-#if defined(ESP32) || defined(ESP8266)
+#if defined(ESP32)
     if (!_queueFileReady || topic == nullptr || payload == nullptr)
         return false;
 
@@ -3661,7 +4245,7 @@ bool Firmngin::_enqueueToQueue(const char *topic, const uint8_t *payload, size_t
 
 bool Firmngin::_peekQueueHead(String &topic, String &payload, bool &retained)
 {
-#if defined(ESP32) || defined(ESP8266)
+#if defined(ESP32)
     if (!_queueFileReady || _queueCount == 0)
         return false;
 
@@ -3720,7 +4304,7 @@ void Firmngin::_drainQueue()
 {
     if (!_queueEnabled || !_queueFileReady)
         return;
-    if (!_mqttClient.connected())
+    if (!_mqttIsConnected())
         return;
     if (_queueCount == 0)
     {
@@ -3748,7 +4332,7 @@ void Firmngin::_drainQueue()
             continue;
         }
 
-        bool ok = _mqttClient.publish(topic.c_str(), (const uint8_t *)payload.c_str(), payload.length(), retained);
+        bool ok = _mqttPublish(topic.c_str(), reinterpret_cast<const uint8_t *>(payload.c_str()), payload.length(), retained);
         if (!ok)
         {
             break;

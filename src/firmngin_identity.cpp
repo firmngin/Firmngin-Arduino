@@ -1,6 +1,6 @@
 #include "firmngin_identity.h"
 
-#if defined(ESP8266) || defined(ESP32)
+#if defined(ESP32)
 #include <LittleFS.h>
 #endif
 
@@ -111,6 +111,32 @@ namespace
         return true;
     }
 
+    bool isValidStreamEndpoint(const String &value)
+    {
+        const bool secure = value.startsWith("wss://") || value.startsWith("https://");
+        const bool plain = value.startsWith("ws://") || value.startsWith("http://");
+        if (!secure && !plain)
+            return false;
+
+        const int schemeEnd = value.indexOf("://");
+        const unsigned int authorityStart = static_cast<unsigned int>(schemeEnd + 3);
+        if (value.length() <= authorityStart)
+            return false;
+
+        for (unsigned int i = 0; i < value.length(); i++)
+        {
+            const char c = value[i];
+            if (c <= ' ' || c == '?' || c == '#')
+                return false;
+        }
+
+        const int pathStart = value.indexOf('/', authorityStart);
+        const String authority = pathStart >= 0
+                                     ? value.substring(authorityStart, pathStart)
+                                     : value.substring(authorityStart);
+        return authority.length() > 0 && authority.indexOf('@') < 0;
+    }
+
     bool findMetaValue(const String &meta, const char *wantedKey, String &out)
     {
         int start = 0;
@@ -136,12 +162,8 @@ namespace
 
     bool mountFS()
     {
-#if defined(ESP8266) || defined(ESP32)
 #if defined(ESP32)
         return LittleFS.begin(true);
-#else
-        return LittleFS.begin();
-#endif
 #else
         return false;
 #endif
@@ -149,14 +171,14 @@ namespace
 
     void unmountFS()
     {
-#if defined(ESP8266) || defined(ESP32)
+#if defined(ESP32)
         LittleFS.end();
 #endif
     }
 
     bool ensureIdentityDirectory()
     {
-#if defined(ESP8266) || defined(ESP32)
+#if defined(ESP32)
         if (LittleFS.exists(IDENTITY_DIR))
             return true;
         return LittleFS.mkdir(IDENTITY_DIR);
@@ -258,6 +280,18 @@ namespace
                     else
                         invalidServiceEndpoint = true;
                 }
+                else if (key == "audio_stream_url")
+                {
+                    if (isValidStreamEndpoint(value))
+                        out.audioStreamUrl = value;
+                    else
+                        invalidServiceEndpoint = true;
+                }
+                else if (key == "audio_stream_token")
+                {
+                    if (value.length() > 0)
+                        out.audioStreamToken = value;
+                }
             }
             start = end + 1;
         }
@@ -273,6 +307,8 @@ namespace
         if (record.tlsMode != "ca" && record.tlsMode != "fingerprint")
             return false;
         if (!isValidHttpsBaseUrl(record.apiBaseUrl) || !isValidHttpsBaseUrl(record.otaBaseUrl))
+            return false;
+        if (record.audioStreamUrl.length() > 0 && !isValidStreamEndpoint(record.audioStreamUrl))
             return false;
         if (!isCertificatePEM(record.clientCert) || !isPrivateKeyPEM(record.privateKey))
             return false;
@@ -429,7 +465,7 @@ namespace FirmnginIdentity
 
     bool load(FirmnginIdentityRecord &out)
     {
-#if !defined(ESP8266) && !defined(ESP32)
+#if !defined(ESP32)
         (void)out;
         return false;
 #else
@@ -444,7 +480,7 @@ namespace FirmnginIdentity
 
     bool save(const FirmnginIdentityRecord &record)
     {
-#if !defined(ESP8266) && !defined(ESP32)
+#if !defined(ESP32)
         (void)record;
         return false;
 #else
@@ -468,6 +504,10 @@ namespace FirmnginIdentity
         meta += "broker_port=" + String(record.brokerPort > 0 ? record.brokerPort : 58884) + "\n";
         meta += "api_base_url=" + record.apiBaseUrl + "\n";
         meta += "ota_base_url=" + record.otaBaseUrl + "\n";
+        if (record.audioStreamUrl.length() > 0)
+            meta += "audio_stream_url=" + record.audioStreamUrl + "\n";
+        if (record.audioStreamToken.length() > 0)
+            meta += "audio_stream_token=" + record.audioStreamToken + "\n";
 
         const bool staged =
             writeTextFile(STAGED_PATHS.clientCert, record.clientCert) &&
@@ -485,7 +525,7 @@ namespace FirmnginIdentity
 
     bool clear()
     {
-#if !defined(ESP8266) && !defined(ESP32)
+#if !defined(ESP32)
         return false;
 #else
         if (!mountFS())

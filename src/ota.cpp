@@ -4,8 +4,6 @@
 
 #if defined(ESP32)
 #include <Update.h>
-#elif defined(ESP8266)
-#include <Updater.h>
 #endif
 
 void Firmngin::setOTABaseURL(const char *baseURL)
@@ -38,7 +36,7 @@ bool Firmngin::otaHTTPGet(const char *path, const char *queryParams, String &res
     String message = String(_deviceId) + "." + String(ts) + ".GET." + fullPath;
     const char *activeServiceCA = _activeServiceCACert();
 
-#if defined(ESP8266) || defined(ESP32)
+#if defined(ESP32)
     HTTPClient http;
 #if defined(ESP32)
     WiFiClientSecure otaClient;
@@ -59,18 +57,6 @@ bool Firmngin::otaHTTPGet(const char *path, const char *queryParams, String &res
         otaClient.setCertificate(_clientCert);
     if (_privateKey != nullptr)
         otaClient.setPrivateKey(_privateKey);
-#elif defined(ESP8266)
-    BearSSL::WiFiClientSecure otaClient;
-    otaClient.setBufferSizes(512, 512);
-    if (_clientCertList != nullptr && _clientPrivKey != nullptr)
-        otaClient.setClientRSACert(_clientCertList, _clientPrivKey);
-    if (activeServiceCA == nullptr)
-    {
-        publishOTAStatus("failed", "Service CA certificate is not configured");
-        return false;
-    }
-    BearSSL::X509List serviceCATrustAnchors(activeServiceCA);
-    otaClient.setTrustAnchors(&serviceCATrustAnchors);
 #endif
     if (!http.begin(otaClient, url))
     {
@@ -191,7 +177,7 @@ bool Firmngin::performOTA(const char *manifestUrl)
 
     String downloadPath = String("/firmware/") + _otaFirmwareID + "/download";
 
-#if defined(ESP8266) || defined(ESP32)
+#if defined(ESP32)
     String url = _otaBaseUrl + downloadPath;
     const char *activeServiceCA = _activeServiceCACert();
 #if defined(ESP32)
@@ -214,23 +200,6 @@ bool Firmngin::performOTA(const char *manifestUrl)
         _otaWifiClient.setCertificate(_clientCert);
     if (_privateKey != nullptr)
         _otaWifiClient.setPrivateKey(_privateKey);
-#elif defined(ESP8266)
-    _otaWifiClient.setBufferSizes(512, 512);
-    if (_clientCertList != nullptr && _clientPrivKey != nullptr)
-        _otaWifiClient.setClientRSACert(_clientCertList, _clientPrivKey);
-    if (activeServiceCA == nullptr)
-    {
-        _otaAsyncState = OTA_ASYNC_IDLE;
-        publishOTAStatus("failed", "Service CA certificate is not configured");
-        _otaFirmwareID = "";
-        return false;
-    }
-    if (_otaTrustAnchors != nullptr)
-    {
-        delete _otaTrustAnchors;
-    }
-    _otaTrustAnchors = new BearSSL::X509List(activeServiceCA);
-    _otaWifiClient.setTrustAnchors(_otaTrustAnchors);
 #endif
     if (!_otaHttp.begin(_otaWifiClient, url))
     {
@@ -287,8 +256,6 @@ bool Firmngin::performOTA(const char *manifestUrl)
     mbedtls_md_init(&_otaSha256Ctx);
     mbedtls_md_setup(&_otaSha256Ctx, mbedtls_md_info_from_type(MBEDTLS_MD_SHA256), 0);
     mbedtls_md_starts(&_otaSha256Ctx);
-#elif defined(ESP8266)
-    br_sha256_init(&_otaSha256Ctx);
 #endif
 
     if (_otaContentLength > 0 && !Update.begin(_otaContentLength))
@@ -349,8 +316,6 @@ void Firmngin::_processOTA()
 
 #if defined(ESP32)
         mbedtls_md_update(&_otaSha256Ctx, _otaBuffer, readLen);
-#elif defined(ESP8266)
-        br_sha256_update(&_otaSha256Ctx, _otaBuffer, readLen);
 #endif
 
         if (_otaContentLength > 0)
@@ -468,12 +433,9 @@ void Firmngin::_processOTA()
         uint8_t computedHash[32];
         mbedtls_md_finish(&_otaSha256Ctx, computedHash);
         mbedtls_md_free(&_otaSha256Ctx);
-#elif defined(ESP8266)
-        uint8_t computedHash[32];
-        br_sha256_out(&_otaSha256Ctx, computedHash);
 #endif
 
-#if defined(ESP32) || defined(ESP8266)
+#if defined(ESP32)
         char computedHex[65];
         for (int i = 0; i < 32; i++)
             sprintf(computedHex + (i * 2), "%02x", computedHash[i]);

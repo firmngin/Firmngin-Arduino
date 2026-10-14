@@ -1,23 +1,14 @@
 /*
- * MqttOnlyExample — Standalone MQTT without the Firmngin class.
+ * MqttOnlyExample — MQTT without the Firmngin class.
  *
- * The Firmngin Arduino library is built on top of PubSubClient (Nick O'Leary) as its
- * MQTT dependency. A vendored copy lives under src/PubSubClient/ in this repo.
- *
- * This sketch uses that PubSubClient directly — no DEVICE_ID, DEVICE_KEY, or
- * #include <firmngin.h>. For Firmngin platform + a second broker, see MqttClientExample.
+ * Uses esp_mqtt_client from the ESP32 Arduino core. No extra MQTT library.
+ * The client reconnects on its own, publishes at QoS 1, and keeps a persistent
+ * session so a subscriber that connects later still receives the backlog.
  */
 
 #include <Arduino.h>
-#include <PubSubClient/PubSubClient.h>
-
-#if defined(ESP8266)
-#include <ESP8266WiFi.h>
-#include <WiFiClientSecure.h>
-#elif defined(ESP32)
 #include <WiFi.h>
-#include <WiFiClientSecure.h>
-#endif
+#include <mqtt_client.h>
 
 #define MQTT_HOST "mqtt.example.com"
 #define MQTT_PORT 58884
@@ -30,62 +21,81 @@
 const char *WIFI_SSID = "YOUR_SSID";
 const char *WIFI_PASS = "YOUR_PASSWORD";
 
-WiFiClientSecure mqttNet;
-PubSubClient mqtt(mqttNet);
-
-static unsigned long lastReconnect = 0;
+static esp_mqtt_client_handle_t mqtt = nullptr;
+static volatile bool mqttUp = false;
 static unsigned long lastPublish = 0;
 
-void onMessage(char *topic, uint8_t *payload, unsigned int length)
+static void onMqttEvent(void *, esp_event_base_t, int32_t, void *data)
 {
-    Serial.print("[mqtt] ");
-    Serial.print(topic);
-    Serial.print(" => ");
-    for (unsigned int i = 0; i < length; i++)
-        Serial.print((char)payload[i]);
-    Serial.println();
+    auto *event = static_cast<esp_mqtt_event_handle_t>(data);
+    if (event->event_id == MQTT_EVENT_CONNECTED)
+    {
+        mqttUp = true;
+        esp_mqtt_client_subscribe(mqtt, MQTT_SUB_TOPIC, 1);
+        Serial.println("MQTT connected");
+    }
+    else if (event->event_id == MQTT_EVENT_DISCONNECTED)
+    {
+        mqttUp = false;
+    }
+    else if (event->event_id == MQTT_EVENT_DATA && event->topic != nullptr)
+    {
+        Serial.print("[mqtt] ");
+        Serial.write(reinterpret_cast<const uint8_t *>(event->topic), event->topic_len);
+        Serial.print(" => ");
+        if (event->data != nullptr && event->data_len > 0)
+            Serial.write(reinterpret_cast<const uint8_t *>(event->data), event->data_len);
+        Serial.println();
+    }
 }
 
-bool mqttConnect()
+static bool mqttStart()
 {
-    if (mqtt.connected())
-        return true;
+    esp_mqtt_client_config_t cfg = {};
+#if ESP_ARDUINO_VERSION_MAJOR >= 3
+    cfg.broker.address.hostname = MQTT_HOST;
+    cfg.broker.address.port = MQTT_PORT;
+    cfg.broker.address.transport = MQTT_TRANSPORT_OVER_SSL;
+    cfg.broker.verification.skip_cert_common_name_check = true;
+    cfg.credentials.client_id = MQTT_CLIENT_ID;
+    cfg.credentials.username = MQTT_USER;
+    cfg.credentials.authentication.password = MQTT_PASS;
+    cfg.session.last_will.topic = "devices/demo/lwt";
+    cfg.session.last_will.msg = "offline";
+    cfg.session.last_will.qos = 1;
+    cfg.session.last_will.retain = 1;
+    cfg.session.disable_clean_session = true;
+    cfg.session.keepalive = 30;
+    cfg.buffer.size = 1024;
+    cfg.buffer.out_size = 1024;
+#else
+    cfg.host = MQTT_HOST;
+    cfg.port = MQTT_PORT;
+    cfg.transport = MQTT_TRANSPORT_OVER_SSL;
+    cfg.skip_cert_common_name_check = true;
+    cfg.client_id = MQTT_CLIENT_ID;
+    cfg.username = MQTT_USER;
+    cfg.password = MQTT_PASS;
+    cfg.lwt_topic = "devices/demo/lwt";
+    cfg.lwt_msg = "offline";
+    cfg.lwt_qos = 1;
+    cfg.lwt_retain = 1;
+    cfg.disable_clean_session = 1;
+    cfg.keepalive = 30;
+    cfg.buffer_size = 1024;
+    cfg.out_buffer_size = 1024;
+#endif
 
-    mqtt.setServer(MQTT_HOST, MQTT_PORT);
-    mqtt.setCallback(onMessage);
-    mqtt.setBufferSize(1024);
-    mqtt.setKeepAlive(30);
-    mqtt.setSocketTimeout(10);
-
-    Serial.print("MQTT connecting ");
-    Serial.println(MQTT_HOST);
-
-    const char *willTopic = "devices/demo/lwt";
-    const char *willMsg = "offline";
-    bool ok = mqtt.connect(
-        MQTT_CLIENT_ID,
-        MQTT_USER,
-        MQTT_PASS,
-        willTopic, 1, true, willMsg);
-
-    if (!ok)
-    {
-        Serial.print("MQTT failed, rc=");
-        Serial.println(mqtt.state());
+    mqtt = esp_mqtt_client_init(&cfg);
+    if (mqtt == nullptr)
         return false;
-    }
-
-    mqtt.subscribe(MQTT_SUB_TOPIC, 1);
-    Serial.println("MQTT connected");
-    return true;
+    esp_mqtt_client_register_event(mqtt, MQTT_EVENT_ANY, onMqttEvent, nullptr);
+    return esp_mqtt_client_start(mqtt) == ESP_OK;
 }
 
 void setup()
 {
     Serial.begin(115200);
-
-    mqttNet.setInsecure();
-
     WiFi.begin(WIFI_SSID, WIFI_PASS);
     while (WiFi.status() != WL_CONNECTED)
     {
@@ -93,39 +103,20 @@ void setup()
         Serial.print(".");
     }
     Serial.println("\nWiFi OK");
-
-    mqttConnect();
+    Serial.println("WARNING: MQTT TLS verification disabled for this example");
+    mqttStart();
 }
 
 void loop()
 {
-    if (WiFi.status() != WL_CONNECTED)
-    {
-        mqtt.disconnect();
-        mqttNet.stop();
-        delay(500);
+    if (!mqttUp)
         return;
-    }
 
-    if (!mqtt.connected())
+    unsigned long now = millis();
+    if (now - lastPublish >= 15000)
     {
-        unsigned long now = millis();
-        if (now - lastReconnect >= 5000)
-        {
-            lastReconnect = now;
-            mqttConnect();
-        }
-    }
-    else
-    {
-        mqtt.loop();
-
-        unsigned long now = millis();
-        if (now - lastPublish >= 15000)
-        {
-            lastPublish = now;
-            String payload = "{\"temp\":25.5,\"ts\":" + String(now) + "}";
-            mqtt.publish(MQTT_PUB_TOPIC, payload.c_str());
-        }
+        lastPublish = now;
+        String payload = "{\"temp\":25.5,\"ts\":" + String(now) + "}";
+        esp_mqtt_client_enqueue(mqtt, MQTT_PUB_TOPIC, payload.c_str(), payload.length(), 1, 0, true);
     }
 }

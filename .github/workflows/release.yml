@@ -62,9 +62,6 @@ jobs:
       - name: Build ESP32 firmware example
         run: pio run -e esp32dev
 
-      - name: Build ESP8266 firmware example
-        run: pio run -e esp12e
-
       - name: Create and push tag
         env:
           INPUT_VERSION: ${{ inputs.version }}

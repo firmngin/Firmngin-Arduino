@@ -4,13 +4,13 @@
   <img src="https://github.com/firmngin/Firmngin-Arduino/blob/main/logo.png?raw=true" alt="Firmngin" width="96">
 </p>
 
-IoT library for ESP8266/ESP32 with secure communication (mTLS), OTA firmware updates, image upload, GPS location, and payment/verification flows for the Firmngin platform.
+IoT library for ESP32 with secure communication (mTLS), OTA firmware updates, image upload, GPS location, and payment/verification flows for the Firmngin platform.
 
 Check out [firmngin.dev](https://firmngin.dev) for more information.
 
 ## Features
 
-- **ESP8266 & ESP32** support
+- **ESP32** support
 - **Event-driven API** using `on()` callbacks: raw or typed
 - **Typed objects** for common flows: `Verifications`, `Payments`, `Dispenses`, `Usages`, `DeviceStates`, `Inits`, `EntityCommand`
 - **Vending mode** for vendingmachines and handle SKU dispense callbacks
@@ -29,16 +29,10 @@ lib_deps =
     firmngin/firmngin  ; or symlink to https://github.com/firmngin/Firmngin-Arduino
 ```
 
-> This library requires **PubSubClient** as an additional dependency. It is bundled (vendored) under `src/PubSubClient/`, so no separate installation is needed.
-
-For a minimal MQTT-only sketch without Firmngin credentials, see `examples/MqttOnlyExample` and `examples/README.md`.
-
 ### Arduino IDE
 
 1. Download the [latest release](https://github.com/firmngin/Firmngin-Arduino/releases) `.zip` and install via **Sketch → Include Library → Add .ZIP Library**, or search **firmngin** in Arduino Library Manager.
 2. Get your `keys.h`: Log in to [firmngin.dev](https://firmngin.dev) → **Device Registry** → select your device → **Secrets** → **Download `keys.h`**. Place it next to your sketch.
-
-Security initialization is fail-closed. `keys.h` must contain non-placeholder `DEVICE_ID` and `DEVICE_KEY`, valid TLS trust/client credentials, and a `DECRYPTOR` containing exactly 32 or 64 hexadecimal characters. Missing or malformed material blocks MQTT connection, and inbound MQTT payloads are never accepted as plaintext. `setInsecure(true)` and broker `noTls` mode remain explicit development-only opt-ins and emit warnings when selected.
 
 ### Factory provisioning
 
@@ -50,11 +44,7 @@ Fleet master firmware built with `FIRMNGIN_FACTORY_SERIAL=1` uses factory protoc
 #include <Arduino.h>
 #include <firmngin.h>
 #include "keys.h"
-#if defined(ESP8266)
-#include <ESP8266WiFi.h>
-#elif defined(ESP32)
 #include <WiFi.h>
-#endif
 
 #define relayPin 2
 
@@ -117,6 +107,59 @@ Register handlers using the enum constants. Use `on(ENUM, callback)` for raw cal
 | `VERIFICATIONS`              | Typed callback: handles PIN display and verification result |
 | `PAYMENTS`                   | Typed callback: handles pending and success payments        |
 | `ENTITIES`                   | Received commands to specific entities (e.g. gpio_1)        |
+
+## Error Codes & Monitoring
+
+The library logs errors with specific codes in format `[FNG-Exxxx]` for easy troubleshooting. Monitor production health using:
+
+```cpp
+uint32_t dropped = fngin.getDroppedMessageCount();
+uint32_t reconnects = fngin.getReconnectCount();
+
+if (dropped > 0) {
+    Serial.printf("⚠ Warning: %u messages dropped\n", dropped);
+}
+```
+
+### Error Code Reference
+
+| Code   | Constant                    | Description                                          | Action Required                          |
+| ------ | --------------------------- | ---------------------------------------------------- | ---------------------------------------- |
+| `1001` | `FMSG_ERR_QUEUE_FULL`       | Message queue full, data dropped                     | Increase queue size or reduce send rate  |
+| `1002` | `FMSG_ERR_CONN_REFUSED`     | Broker refused connection                            | Check credentials in keys.h              |
+| `1003` | `FMSG_ERR_CONN_TIMEOUT`     | Connection timeout                                   | Check network/firewall                   |
+| `1004` | `FMSG_ERR_TLS_HANDSHAKE`    | TLS handshake failed                                 | Verify CA certificate                    |
+| `1005` | `FMSG_ERR_TLS_CERT_VERIFY`  | TLS certificate verification failed                  | Check certificate expiry & hostname      |
+| `1006` | `FMSG_ERR_TCP_CONNECT`      | TCP connection failed                                | Network issue or broker down             |
+| `1007` | `FMSG_ERR_DNS_LOOKUP`       | DNS lookup failed                                    | Check DNS server or broker hostname      |
+| `1008` | `FMSG_ERR_MESSAGE_TOO_LARGE`| Message exceeds 4KB limit                            | Split large messages or reduce size      |
+| `1009` | `FMSG_ERR_BUFFER_OVERFLOW`  | Memory allocation failed                             | Free memory or reduce buffer usage       |
+| `1010` | `FMSG_ERR_MUTEX_TIMEOUT`    | Mutex lock timeout (deadlock risk)                   | Report to maintainer                     |
+| `1999` | `FMSG_ERR_UNKNOWN`          | Unknown error                                        | Enable debug mode for details            |
+
+### Production Monitoring
+
+Monitor connection health in production:
+
+```cpp
+void loop() {
+    fngin.loop();
+
+    static unsigned long lastCheck = 0;
+    if (millis() - lastCheck >= 60000) { // Check every minute
+        lastCheck = millis();
+        
+        uint32_t dropped = fngin.getDroppedMessageCount();
+        uint32_t reconnects = fngin.getReconnectCount();
+        
+        // Define your thresholds
+        if (dropped > 100 || reconnects > 10) {
+            // Alert: System unstable
+            // Take action: reboot, notify admin, etc.
+        }
+    }
+}
+```
 
 ### Entity Commands
 
@@ -230,6 +273,109 @@ fngin.pushLocation()
     .speed(1.2f);
 ```
 
+### Audio Stream (voice output)
+
+Audio reaches a device over **one persistent WebSocket per device**, not a URL per clip. The backend streams 16 kHz mono signed-16 little-endian PCM down it in 640-byte frames (20 ms each), and a newer clip cancels the one still playing. Explicit `audio.flush` clears both the software FIFO and built-in I2S TX DMA immediately; natural `audio.end` still drains with a fade. The device plays what arrives, with no fetch and no per-clip URL.
+
+`openAudioStream()` needs only the chunk callback: the endpoint is this device's own stream on the audio gateway, and the token rides in from provisioning. The transport is Espressif's official `esp_websocket_client` (Apache-2.0), vendored into `src/` because Arduino-ESP32 core 3.x stopped bundling it while core 2.0.x still ships it — the version guard picks the right one and there is no third-party WebSocket or audio-decoder dependency. The wire stays mono (640 bytes), while Firmngin expands every sample to interleaved L/R before the callback (1280 bytes) to avoid ESP32's 16-bit mono TX sample reordering. Drain happens from `loop()` so the callback may block on I2S.
+
+```cpp
+#include "keys.h"
+
+Entity speaker1("speaker1"); // the audio_output entity from the dashboard
+
+void setup() {
+    // ... WiFi ...
+    fngin.setAudioInterface(speaker1, MAX98357A).pins(I2S_BCLK, I2S_LRC, I2S_DOUT);
+    fngin.begin(); // starts I2S, then connects this device's PCM stream and stands by
+}
+```
+
+A registered `setAudioInterface(entity, chip)` is all it takes — every output must be
+bound to an entity, there is no unnamed default. `begin()` arms the stream and
+`loop()` opens it as soon as the clock is synced, so there is no `openAudioStream()`
+to call. The endpoint itself is not guessed — it arrives in init, in the `t = 6`
+entity's value. The stream waits for that
+frame before connecting; a provisioned URL, when present, is used immediately. Pass a callback with `fngin.enableAudioStream(onAudioEvent)` when you want
+stream events instead of the Serial error report, or call `closeAudioStream()` to
+stop. Immediate DMA clearing applies to speakers registered with `setAudioInterface`;
+a custom chunk callback owns and must clear its own hardware queue on `AUDIO_FLUSH`.
+
+The `audio_output` entity from init (`t = 6`) binds like any other entity, but with its
+own macro — a clip's control frame carries the `entity_key` it targets, so the handler
+is routed to the right speaker:
+
+```cpp
+Entity speaker("gpio_6"); // the audio_output entity key from init
+ON_AUDIO(speaker, [](FirmnginAudioEvent event, const char *entityKey) {
+    if (event == AUDIO_START)
+        Serial.printf("playing %s\n", entityKey);
+    else if (event == AUDIO_END)
+        Serial.println("done");
+    else if (event == AUDIO_ERROR)
+        Serial.println("audio error");
+});
+```
+
+Prefer the manual path when you want to tune I2S before `begin()` or supply your own
+chunk callback. One WebSocket carries every clip, so a second speaker needs no second
+connection — register each output under its entity and clips route by the `entity_key`
+the gateway tags them with. A missing or unknown key is rejected and its PCM is
+discarded; the library never falls back to another speaker:
+
+```cpp
+Entity speaker1("speaker1"); // audio_output entity #1
+Entity garden("garden");     // audio_output entity #2
+
+fngin.setAudioInterface(speaker1, MAX98357A).pins(I2S_BCLK1, I2S_LRC1, I2S_DOUT1);
+fngin.setAudioInterface(garden, PCM5102).pins(I2S_BCLK2, I2S_LRC2, I2S_DOUT2);
+```
+
+Every audio setting is optional in one object. An untouched object
+preserves the defaults; set only the hardware-specific values that need overriding:
+```cpp
+FirmnginAudioConfig audio;
+audio.url = "ws://192.168.100.31:8282/v1/streams/test?pace=0"; // optional; nullptr derives provisioning URL
+audio.token = "";                 // optional; nullptr uses provisioned token, empty disables bearer
+audio.bufferFrames = 48;          // optional; ring capacity (~960 ms)
+audio.framesPerLoop = 8;          // optional; frames drained per loop() pass
+audio.websocketBufferBytes = 1024; // optional; default 1024, must be >= 640
+audio.websocketTaskStack = 4096;   // optional; default 4096, must be >= 2048
+
+fngin.openAudioStream(audio, onAudioChunk, onAudioEvent);
+```
+
+Call `loop()` often: PCM is drained there into I2S. The websocket task never blocks on a
+full ring (it drops a frame instead) so `audio.flush` on stop always stays readable. A
+clean `audio.end` plays every queued sample at full level (no content fade).
+
+### Audio Input Stream (INMP441)
+
+Audio input uses the same authenticated device WebSocket. `startAudioInput()` sends a
+capture start control, then a dedicated ESP32 task reads the INMP441 and sends 16 kHz
+mono signed-16 PCM in 640-byte/20 ms frames. `stopAudioInput()` closes the capture;
+the gateway forwards it to firmnginbe, which stores a WAV in R2. A capture is limited
+to 30 seconds and input is half-duplex with speaker playback.
+
+INMP441 emits 24-bit samples in a 32-clock I2S slot. Tie its L/R pin LOW for
+`FIRMNGIN_I2S_LEFT` or HIGH for `FIRMNGIN_I2S_RIGHT`:
+
+```cpp
+Entity microphone("microphone"); // audio_input entity
+
+fngin.setAudioInput(microphone, INMP441)
+    .pins(MIC_BCLK, MIC_WS, MIC_SD)
+    .channel(FIRMNGIN_I2S_LEFT);
+
+// Push-to-talk handlers:
+fngin.startAudioInput(microphone);
+fngin.stopAudioInput();
+```
+
+`AUDIO_INPUT_ACCEPTED`, `AUDIO_INPUT_SAVED`, and `AUDIO_INPUT_ERROR` are delivered
+through the same `ON_AUDIO(microphone, ...)` event mechanism. See
+`examples/AudioInputStreamExample` for a button-controlled sketch.
+
 ### Image Upload
 
 Upload images using `uploadImage()`:
@@ -335,7 +481,7 @@ fngin.setEnableOTA(false);
 
 ---
 
-## Monetization Flow
+## DeviceBilling Flow
 
 The following flows are used when your device is integrated with Firmngin's payment and verification system.
 
@@ -468,6 +614,9 @@ fngin.on(INIT, [](Inits &i) {
     if (i.isServiceMode()) {
         Serial.println("Business mode: service");
     }
+    if (i.isTerminalMode()) {
+        Serial.println("Business mode: terminal");
+    }
 
     if (i.isPinEnabled()) {
         Serial.println("PIN verification enabled");
@@ -525,18 +674,29 @@ ON_DISPENSES(d) {
 | `setTimezone(int)`                                             | Set timezone offset from GMT                                                                                  | `void`           | `-12` to `12`                               |
 | `setDaylightOffsetSec(int)`                                    | Set daylight saving offset in seconds                                                                         | `void`           | Any integer                                 |
 | `setNtpServer(const char*)`                                    | Set NTP server address                                                                                        | `void`           | e.g. `"pool.ntp.org"`                       |
-| `setClient(Client&)`                                           | Use an external network client                                                                                | `void`           | EthernetClient, other Client impl           |
-| `isPlatformSupported()`                                        | Check if current board is supported                                                                           | `bool`           | `true` (ESP8266/ESP32), `false`             |
+| `mqttClientBegin(...)`                                         | Open a second broker on the built-in ESP-MQTT client                                                         | `bool`           | host, credentials, message handler          |
+| `getDroppedMessageCount()`                                     | Get total dropped messages (queue full, allocation errors)                                                   | `uint32_t`       | Counter since boot                          |
+| `getReconnectCount()`                                          | Get total reconnection attempts                                                                              | `uint32_t`       | Counter since boot                          |
+| `resetMessageStats()`                                          | Reset dropped message and reconnect counters                                                                  | `void`           | N/A                                         |
+| `isPlatformSupported()`                                        | Check if current board is supported                                                                           | `bool`           | `true` on ESP32, `false` otherwise          |
 | `on(STATE, callback)`                                          | Register a raw callback for any state                                                                         | `void`           | See enum constants                          |
-| `on(VERIFICATIONS, callback)`                                  | Register typed callback for dpin + vr                                                                         | `void`           | `Verifications &`                           |
-| `on(PAYMENTS, callback)`                                       | Register typed callback for pp + pm                                                                           | `void`           | `Payments &`                                |
+| `on(VERIFICATIONS, callback)`                                  | Register typed callback for verification steps                                                                | `void`           | `Verifications &`                           |
+| `on(PAYMENTS, callback)`                                       | Register typed callback for payment events                                                                    | `void`           | `Payments &`                                |
 | `on(DISPENSES, callback)`                                      | Register typed callback for vending dispense SKUs                                                             | `void`           | `Dispenses &`                               |
-| `on(USAGES, callback)`                                         | Register typed callback for ur + le + nl                                                                      | `void`           | `Usages &`                                  |
-| `on(DEVICE_STATUS, callback)`                                  | Register typed callback for ds                                                                                | `void`           | `DeviceStates &`                            |
-| `on(INIT, callback)`                                           | Register typed callback for init                                                                              | `void`           | `Inits &`                                   |
+| `on(USAGES, callback)`                                         | Register typed callback for usage limits                                                                      | `void`           | `Usages &`                                  |
+| `on(DEVICE_STATUS, callback)`                                  | Register typed callback for device status                                                                     | `void`           | `DeviceStates &`                            |
+| `on(INIT, callback)`                                           | Register typed callback for initial configuration                                                             | `void`           | `Inits &`                                   |
 | `on(ACTIVE_SESSION, callback)`                                 | Register active session callback                                                                              | `void`           | `ActiveSession &`                           |
 | `on(ENTITIES, callback)`                                       | Register typed callback for entity commands                                                                   | `void`           | `EntityCommand &`                           |
 | `onEntity(key, callback)`                                      | Register callback for a specific entity key (string or object)                                                | `void`           | `EntityCommand &`                           |
+| `setAudioInterface(entity, chip).pins(...)` / `setAudioInterface(key, chip)` | Bind an audio_output entity to I2S (MAX98357A / PCM5102 / I2S_TX); every speaker must be bound to an entity | `FirmnginI2s &` | multi-speaker; key = entity_key on clips      |
+| `setAudioInput(entity, INMP441).pins(...).channel(...)` | Bind an audio_input entity to an INMP441 source | `FirmnginI2s &` | left/right slot follows the module L/R pin |
+| `startAudioInput(entity)` / `stopAudioInput()` / `isAudioInputRecording()` | Start, finalize, and inspect a push-to-talk capture over the persistent WSS | `bool` / `void` / `bool` | one capture at a time, max 30 seconds |
+| `openAudioStream(onChunk, onEvent)`                             | Open this device's PCM stream with default audio config; deliver I2S-ready stereo frames                      | `bool`           | `false` = not opened; an error event says why |
+| `openAudioStream(config, onChunk, onEvent)`                     | Open with optional URL/token/buffer/backpressure/WebSocket overrides in `FirmnginAudioConfig`                 | `bool`           | `false` = not opened; an error event says why |
+| `openAudioStream(url, token, onChunk, onEvent)`                 | Compatibility overload for an explicit endpoint/token                                                        | `bool`           | `false` = not opened; an error event says why |
+| `enableAudioStream(onEvent)`                                   | Re-arm the automatic stream after `closeAudioStream()`; optional event callback                                 | `void`           | N/A                                          |
+| `closeAudioStream()` / `isAudioStreamConnected()`                | Stop and release the audio stream / report socket state                                                     | `void` / `bool`  | N/A                                          |
 | `pushEntity(key, value)`                                       | Send a single entity state update (key: string/Entity. value: const char\*, String, int, float, double, bool) | `bool`           | `true` = sent, `false` = fail               |
 | `pushEntity(entity, value)`                                    | Send entity state using Entity object as key                                                                  | `bool`           | `true` = sent, `false` = fail               |
 | `pushEntity(key, value, decimals)`                             | Send numeric value with decimal precision                                                                     | `bool`           | `true` = sent, `false` = fail               |
@@ -552,7 +712,6 @@ ON_DISPENSES(d) {
 | `getFirmwareTargetBoard()`                                     | Get target board identifier                                                                                   | `const char*`    | Board string                                |
 | `getFirmwareTargetModel()`                                     | Get target model string                                                                                       | `const char*`    | Model string                                |
 | `syncFirmwareInfo()`                                           | Push firmware info to server                                                                                  | `bool`           | `true` = sent, `false` = fail               |
-| `setOTABaseURL(url)`                                           | Set custom OTA server base URL                                                                                | `void`           | N/A                                         |
 | `setEnableOTA(bool)`                                           | Enable or disable OTA (enabled by default)                                                                    | `void`           | `true`, `false`                             |
 | `enableOTA(bool)`                                              | Alias for setEnableOTA                                                                                        | `void`           | `true`, `false`                             |
 | `checkOTA()`                                                   | Check server for available firmware update                                                                    | `bool`           | `true` = update available                   |
@@ -588,6 +747,38 @@ ON_DISPENSES(d) {
 | `quantity()`   | Item quantity                                 | `int`       | e.g. `1`                     |
 | `metadata()`   | Raw JSON payload                              | `String`    | Full JSON string             |
 
+### Terminal QR Object
+
+Typed payload for terminal business mode (`md: 3` in init): a device-entered monetary amount without a catalog or a service session.
+
+| Member / Function | Description                                                                 | Return Type | Possible Values                                                                     |
+| ------------- | --------------------------------------------------------------------------- | -------- | ----------------------------------------------------------------------------- |
+| `orderCode`   | Human-readable order code                                                   | `String` | e.g. `"ODR-260506-12345678"`                                                  |
+| `status`      | Transaction status; a non-standard value is a failure code                  | `String` | `pending`, `paid`, `expired`, `canceled`, `idle`, or failure code (see below) |
+| `amount`      | Amount as integer-string IDR                                                | `String` | e.g. `"25000"`                                                                |
+| `qrString`    | Raw QRIS content — render it with the application's QR encoder (not base64) | `String` | QRIS string                                                                   |
+| `expiresAt`   | QR expiry                                                                   | `String` | e.g. `"2026-05-06T12:00:00Z"`                                                 |
+| `isValid()`   | Check if payload was parsed successfully                                    | `bool`   | `true`, `false`                                                               |
+| `isPending()` | True if waiting for payment                                                 | `bool`   | `true`, `false`                                                               |
+| `isPaid()`    | True if payment settled                                                     | `bool`   | `true`, `false`                                                               |
+| `isIdle()`    | True if device terminal is idle                                             | `bool`   | `true`, `false`                                                               |
+| `hasError()`  | True if `status` carries a failure code (no separate error field)           | `bool`   | `true`, `false`                                                               |
+| `isFailed()`  | True for an ended failed transaction (expired/canceled/failure, has `oc`)   | `bool`   | `true`, `false`                                                               |
+
+Failure codes in `status`: `INVALID_INPUT`, `TERMINAL_MISMATCH` ("not yours" — only this device's own transaction can be cancelled), `PAYMENT_ALREADY_PAID`, `PAYMENT_BUSY`, `PAYMENT_CANCEL_FAILED`, `TERMINAL_FEE_POLICY_REQUIRED`.
+
+### Terminal Methods
+
+| Function                            | Description                                                                                                                                          | Return Type    | Possible Values                                                                                                                                                                                          |
+| ----------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- | -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `setAmountTerminalQR(amount)`       | Charge an amount (digits only, whole IDR 1000–99999999): sets the amount and publishes the request in one call; the library generates the request id | `const char *` | `nullptr` = sent; otherwise a reason to show the operator (`amount is empty`, `digits only`, `amount too long`, `Failed to sent message`). A range rejection arrives later as a failure code in `status` |
+| `cancelTerminalQR()`                | Cancel the transaction this device has open — no request id needed, no local QR object to keep                                                       | `bool`         | `true` = sent, `false` = fail                                                                                                                                                                            |
+| `onTerminalQR(callback)`            | Register typed callback for QR events and request rejections                                                                                         | `void`         | `TerminalQR &`                                                                                                                                                                                           |
+| `onTerminalPaymentFailed(callback)` | Register typed callback for failed/expired/canceled transactions                                                                                     | `void`         | `TerminalQR &`                                                                                                                                                                                           |
+| `Inits.isTerminalMode()`            | True when the device runs in terminal mode (`md: 3`)                                                                                                 | `bool`         | `true`, `false`                                                                                                                                                                                          |
+
+See `examples/TerminalQR/TerminalQR.ino` for a complete sketch. Events can repeat (QoS 1 + retries), so callbacks must be idempotent. A rejection of a newer input leaves the current QR visible; a late outcome for an older transaction cannot clear a newer QR — track the latest request id separately from the displayed order code.
+
 ### Usages Object
 
 | Function            | Description                              | Return Type | Possible Values                          |
@@ -620,25 +811,27 @@ ON_DISPENSES(d) {
 
 ### Inits Object
 
-| Function                   | Description                              | Return Type | Possible Values                                                                                                 |
-| -------------------------- | ---------------------------------------- | ----------- | --------------------------------------------------------------------------------------------------------------- |
-| `isValid()`                | Check if payload was parsed successfully | `bool`      | `true`, `false`                                                                                                 |
-| `entities()`               | Raw JSON array of GPIO entities          | `String`    | e.g. `[{"p":1,"v":"0"}]`                                                                                        |
-| `merchantStatus()`         | Current merchant status                  | `String`    | `"idle"`, `"pending_payment"`, `"expired_payment"`, `"success_payment"`, `"maintenance"`, `"on_active_service"` |
-| `activeOrderId()`          | Active paid order code from init         | `String`    | e.g. `"ODR-260601-12345678"`                                                                                    |
-| `verificationFlag()`       | Verification mode flag                   | `int`       | `0`, `1`, `2`, `3`                                                                                              |
-| `isIdle()`                 | Merchant status is idle                  | `bool`      | `true`, `false`                                                                                                 |
-| `isPendingPayment()`       | Merchant status is pending payment       | `bool`      | `true`, `false`                                                                                                 |
-| `isExpiredPayment()`       | Merchant status is expired payment       | `bool`      | `true`, `false`                                                                                                 |
-| `isSuccessPayment()`       | Merchant status is success payment       | `bool`      | `true`, `false`                                                                                                 |
-| `isMaintenance()`          | Merchant status is maintenance           | `bool`      | `true`, `false`                                                                                                 |
-| `isOnActiveService()`      | Merchant status is on active service     | `bool`      | `true`, `false`                                                                                                 |
-| `isPinEnabled()`           | PIN verification is enabled              | `bool`      | `true`, `false`                                                                                                 |
-| `isPreconditionEnabled()`  | Precondition verification is enabled     | `bool`      | `true`, `false`                                                                                                 |
-| `isVerificationRequired()` | Some form of verification is required    | `bool`      | `true`, `false`                                                                                                 |
-| `isServiceMode()`          | Business mode is service                 | `bool`      | `true`, `false`                                                                                                 |
-| `isVendingMode()`          | Business mode is vending                 | `bool`      | `true`, `false`                                                                                                 |
-| `metadata()`               | Raw JSON payload                         | `String`    | Full JSON string                                                                                                |
+| Function                   | Description                                  | Return Type | Possible Values                                                                                                 |
+| -------------------------- | -------------------------------------------- | ----------- | --------------------------------------------------------------------------------------------------------------- |
+| `isValid()`                | Check if payload was parsed successfully     | `bool`      | `true`, `false`                                                                                                 |
+| `entities()`               | Raw JSON array of GPIO entities              | `String`    | e.g. `[{"p":1,"v":"0","t":41}]`                                                                                 |
+| `merchantStatus()`         | Current merchant status                      | `String`    | `"idle"`, `"pending_payment"`, `"expired_payment"`, `"success_payment"`, `"maintenance"`, `"on_active_service"` |
+| `activeOrderId()`          | Active paid order code from init             | `String`    | e.g. `"ODR-260601-12345678"`                                                                                    |
+| `audioStreamUrl()`         | Stream endpoint from a `t=5` or `t=6` entity | `String`    | Empty when the device has no audio entity                                                                       |
+| `verificationFlag()`       | Verification mode flag                       | `int`       | `0`, `1`, `2`, `3`                                                                                              |
+| `isIdle()`                 | Merchant status is idle                      | `bool`      | `true`, `false`                                                                                                 |
+| `isPendingPayment()`       | Merchant status is pending payment           | `bool`      | `true`, `false`                                                                                                 |
+| `isExpiredPayment()`       | Merchant status is expired payment           | `bool`      | `true`, `false`                                                                                                 |
+| `isSuccessPayment()`       | Merchant status is success payment           | `bool`      | `true`, `false`                                                                                                 |
+| `isMaintenance()`          | Merchant status is maintenance               | `bool`      | `true`, `false`                                                                                                 |
+| `isOnActiveService()`      | Merchant status is on active service         | `bool`      | `true`, `false`                                                                                                 |
+| `isPinEnabled()`           | PIN verification is enabled                  | `bool`      | `true`, `false`                                                                                                 |
+| `isPreconditionEnabled()`  | Precondition verification is enabled         | `bool`      | `true`, `false`                                                                                                 |
+| `isVerificationRequired()` | Some form of verification is required        | `bool`      | `true`, `false`                                                                                                 |
+| `isServiceMode()`          | Business mode is service                     | `bool`      | `true`, `false`                                                                                                 |
+| `isVendingMode()`          | Business mode is vending                     | `bool`      | `true`, `false`                                                                                                 |
+| `isTerminalMode()`         | Business mode is terminal (`md: 3`)          | `bool`      | `true`, `false`                                                                                                 |
+| `metadata()`               | Raw JSON payload                             | `String`    | Full JSON string                                                                                                |
 
 ### Dispenses Object
 
@@ -679,20 +872,21 @@ ON_DISPENSES(d) {
 
 ### Macros
 
-| Macro                               | Kind                   | Payload                      | Style                | Example                                                    |
-| ----------------------------------- | ---------------------- | ---------------------------- | -------------------- | ---------------------------------------------------------- |
-| `ON_ENTITY(entityObject, callback)` | Entity callback        | `EntityCommand &`            | Inline lambda        | `ON_ENTITY(relay1, [](EntityCommand &cmd){ ... });`        |
-| `ON_ENTITY_S(key, callback)`        | Entity callback        | `EntityCommand &`            | Inline lambda        | `ON_ENTITY_S("led_1", [](EntityCommand &cmd){ ... });`     |
-| `fngin.onEntity(key, callback)`     | Entity callback        | `EntityCommand &`            | Runtime registration | `fngin.onEntity("status", [](EntityCommand &cmd){ ... });` |
-| `ON_ENTITIES(cmd)`                  | Global entity callback | `EntityCommand &`            | Macro body           | `ON_ENTITIES(cmd) { ... }`                                 |
-| `ON_VERIFICATIONS(v)`               | Verification flow      | `Verifications &`            | Macro body           | `ON_VERIFICATIONS(v) { ... }`                              |
-| `ON_PAYMENTS(p)`                    | Payment flow           | `Payments &`                 | Macro body           | `ON_PAYMENTS(p) { ... }`                                   |
-| `ON_DISPENSES(d)`                   | Vending dispense       | `Dispenses &`                | Macro body           | `ON_DISPENSES(d) { for (...) d.skuAt(i); }`                |
-| `ON_USAGES(u)`                      | Usage flow             | `Usages &`                   | Macro body           | `ON_USAGES(u) { ... }`                                     |
-| `ON_DEVICE_STATUS(ds)`              | Device status flow     | `DeviceStates &`             | Macro body           | `ON_DEVICE_STATUS(ds) { ... }`                             |
-| `ON_INIT(i)`                        | Init flow              | `Inits &`                    | Macro body           | `ON_INIT(i) { i.isVendingMode(); }`                        |
-| `ON_OTA_STATUS(status, message)`    | OTA status             | `const char *, const char *` | Macro body           | `ON_OTA_STATUS(status, message) { ... }`                   |
-| `ON_ACTIVE_SESSION(s)`              | Active session         | `ActiveSession &`            | Macro body           | `ON_ACTIVE_SESSION(s) { ... }`                             |
+| Macro                               | Kind                      | Payload                            | Style                | Example                                                              |
+| ----------------------------------- | ------------------------- | ---------------------------------- | -------------------- | -------------------------------------------------------------------- |
+| `ON_ENTITY(entityObject, callback)` | Entity callback           | `EntityCommand &`                  | Inline lambda        | `ON_ENTITY(relay1, [](EntityCommand &cmd){ ... });`                  |
+| `ON_ENTITY_S(key, callback)`        | Entity callback           | `EntityCommand &`                  | Inline lambda        | `ON_ENTITY_S("led_1", [](EntityCommand &cmd){ ... });`               |
+| `ON_AUDIO(entityObject, callback)`  | Audio input/output entity | `FirmnginAudioEvent, const char *` | Inline lambda        | `ON_AUDIO(speaker, [](FirmnginAudioEvent e, const char *k){ ... });` |
+| `fngin.onEntity(key, callback)`     | Entity callback           | `EntityCommand &`                  | Runtime registration | `fngin.onEntity("status", [](EntityCommand &cmd){ ... });`           |
+| `ON_ENTITIES(cmd)`                  | Global entity callback    | `EntityCommand &`                  | Macro body           | `ON_ENTITIES(cmd) { ... }`                                           |
+| `ON_VERIFICATIONS(v)`               | Verification flow         | `Verifications &`                  | Macro body           | `ON_VERIFICATIONS(v) { ... }`                                        |
+| `ON_PAYMENTS(p)`                    | Payment flow              | `Payments &`                       | Macro body           | `ON_PAYMENTS(p) { ... }`                                             |
+| `ON_DISPENSES(d)`                   | Vending dispense          | `Dispenses &`                      | Macro body           | `ON_DISPENSES(d) { for (...) d.skuAt(i); }`                          |
+| `ON_USAGES(u)`                      | Usage flow                | `Usages &`                         | Macro body           | `ON_USAGES(u) { ... }`                                               |
+| `ON_DEVICE_STATUS(ds)`              | Device status flow        | `DeviceStates &`                   | Macro body           | `ON_DEVICE_STATUS(ds) { ... }`                                       |
+| `ON_INIT(i)`                        | Init flow                 | `Inits &`                          | Macro body           | `ON_INIT(i) { i.isVendingMode(); }`                                  |
+| `ON_OTA_STATUS(status, message)`    | OTA status                | `const char *, const char *`       | Macro body           | `ON_OTA_STATUS(status, message) { ... }`                             |
+| `ON_ACTIVE_SESSION(s)`              | Active session            | `ActiveSession &`                  | Macro body           | `ON_ACTIVE_SESSION(s) { ... }`                                       |
 
 For runtime registration, active session uses:
 

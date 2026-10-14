@@ -5,24 +5,12 @@
 #if defined(ESP32)
 #include <esp_system.h>
 #include <mbedtls/gcm.h>
-#elif defined(ESP8266)
-#include <ChaChaPoly.h>
-extern "C"
-{
-#include "user_interface.h"
-}
 #endif
 
 void firmngin_fill_e2ee_nonce(uint8_t *iv, size_t len)
 {
 #if defined(ESP32)
     esp_fill_random(iv, len);
-#elif defined(ESP8266)
-    if (!os_get_random(iv, len))
-    {
-        for (size_t i = 0; i < len; i++)
-            iv[i] = (uint8_t)random(0, 256);
-    }
 #else
     for (size_t i = 0; i < len; i++)
         iv[i] = (uint8_t)random(0, 256);
@@ -62,21 +50,6 @@ bool firmngin_encrypt_e2ee(const uint8_t *plaintext, size_t plain_len, const uin
     *packet_len = 12 + plain_len + 16;
     return true;
 
-#elif defined(ESP8266)
-    if (key_len != 32)
-        return false;
-
-    ChaChaPoly chacha;
-    if (!chacha.setKey(key, 32))
-        return false;
-    if (!chacha.setIV(iv, 12))
-        return false;
-
-    chacha.encrypt(ciphertext, plaintext, plain_len);
-    chacha.computeTag(tag, 16);
-
-    *packet_len = 12 + plain_len + 16;
-    return true;
 #else
     (void)plaintext;
     (void)plain_len;
@@ -146,29 +119,6 @@ bool firmngin_decrypt_e2ee(const uint8_t *packet, size_t packet_len, const uint8
 
     return false;
 
-#elif defined(ESP8266)
-    if (key_len != 32)
-        return false;
-
-    ChaChaPoly chacha;
-    if (!chacha.setKey(key, 32))
-        return false;
-    if (!chacha.setIV(iv, 12))
-        return false;
-
-    chacha.decrypt(plaintext, ciphertext, cipher_len);
-
-    uint8_t computed_tag[16];
-    chacha.computeTag(computed_tag, 16);
-
-    if (!chacha.checkTag(tag, 16))
-    {
-        memset(plaintext, 0, cipher_len);
-        return false;
-    }
-
-    *plain_len = cipher_len;
-    return true;
 #else
     (void)iv;
     (void)ciphertext;

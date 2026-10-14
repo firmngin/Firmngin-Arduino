@@ -1,4 +1,5 @@
 #!/bin/bash
+set -euo pipefail
 
 # Absolute path from script directory to project root
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -57,36 +58,10 @@ cp "$ROOT_DIR/README.md" "$RELEASE_DIR/" 2>/dev/null || echo "README.md not foun
 [ ! -f "$RELEASE_DIR/keywords.txt" ] && [ -f "$ROOT_DIR/keywords.txt" ] && cp "$ROOT_DIR/keywords.txt" "$RELEASE_DIR/" || echo "keywords.txt not found"
 cp "$ROOT_DIR/CHANGELOG.md" "$RELEASE_DIR/" 2>/dev/null || echo "CHANGELOG.md not found"
 
-# Copy source files
-SOURCE_FILES=(
-    "firmngin.h"
-    "firmngin_version.h"
-    "firmngin.cpp"
-    "firmngin_identity.h"
-    "firmngin_identity.cpp"
-    "json.h"
-    "crypto.h"
-    "crypto.cpp"
-    "hmac.h"
-    "hmac.cpp"
-    "ota.cpp"
-    "ota_progress.h"
-    "ota_progress.cpp"
-    "ota_rollback.h"
-    "ota_rollback.cpp"
-    "queue.cpp"
-    "queue_format.h"
-    "queue_format.cpp"
-)
-
-for source_file in "${SOURCE_FILES[@]}"; do
-    cp "$ROOT_DIR/src/$source_file" "$RELEASE_DIR/src/" 2>/dev/null || echo "$source_file not found"
-done
-
-# Copy bundled PubSubClient
-mkdir -p "$RELEASE_DIR/src/PubSubClient"
-cp "$ROOT_DIR/src/PubSubClient/PubSubClient.h" "$RELEASE_DIR/src/PubSubClient/" 2>/dev/null || echo "PubSubClient.h not found"
-cp "$ROOT_DIR/src/PubSubClient/PubSubClient.cpp" "$RELEASE_DIR/src/PubSubClient/" 2>/dev/null || echo "PubSubClient.cpp not found"
+# Copy every compilable source file. Keeping a hand-written list previously omitted
+# audio_stream_protocol.*, md5.* and the vendored esp_websocket_client.c, producing a
+# ZIP whose firmngin.h could not compile.
+cp "$ROOT_DIR"/src/*.h "$ROOT_DIR"/src/*.c "$ROOT_DIR"/src/*.cpp "$RELEASE_DIR/src/"
 
 # Copy examples
 echo "Copying examples..."
@@ -112,8 +87,9 @@ rm -rf "$RELEASE_DIR/examples/FactoryFleetExample"
 # Validate that all primary examples are present
 EXPECTED_EXAMPLES=(
     "BasicExample/BasicExample.ino"
+    "AudioStreamExample/AudioStreamExample.ino"
     "BasicFleetFactory/BasicFleetFactory.ino"
-    "BasicMonetizeExample/BasicMonetizeExample.ino"
+    "DeviceBillingExample/DeviceBillingExample.ino"
     "BatchStateExample/BatchStateExample.ino"
     "DisplayPINExample/DisplayPINExample.ino"
     "EthernetExample/EthernetExample.ino"

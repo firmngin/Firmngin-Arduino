@@ -10,11 +10,7 @@
 #include <Arduino.h>
 #include <firmngin.h>
 
-#if defined(ESP8266)
-#include <ESP8266WiFi.h>
-#elif defined(ESP32)
 #include <WiFi.h>
-#endif
 
 const char *ssid     = "YOUR_SSID";
 const char *password = "YOUR_PASSWORD";
@@ -33,11 +29,7 @@ void setup() {
   fngin.setTimezone(7);
 
   // Set firmware info (version, board, model)
-#if defined(ESP8266)
-  fngin.setFirmwareInfo("1.0.0", "ESP8266", "esp8266:esp8266:generic");
-#elif defined(ESP32)
   fngin.setFirmwareInfo("1.0.0", "ESP32", "esp32:esp32:esp32");
-#endif
 
   // You can also use the OTA status callback to get the status of the OTA update.
   fngin.onOTAStatus([](const char *status, const char *message) {

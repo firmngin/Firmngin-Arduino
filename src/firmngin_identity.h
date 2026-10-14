@@ -18,6 +18,10 @@ struct FirmnginIdentityRecord
     int brokerPort = 0;
     String apiBaseUrl;
     String otaBaseUrl;
+    // Audio gateway endpoint and the token for this device's stream. Both are
+    // optional: a device without them still derives an endpoint from the gateway base.
+    String audioStreamUrl;
+    String audioStreamToken;
 };
 
 namespace FirmnginIdentity

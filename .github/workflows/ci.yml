@@ -32,7 +32,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        env: [esp32dev, esp12e]
+        env: [esp32dev]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

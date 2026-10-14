@@ -1,13 +1,14 @@
 {
     "name": "firmngin",
-    "version": "1.2.1",
-    "description": "IoT Library for Firmngin Platform with mTLS support",
+    "version": "1.3.0",
+    "description": "The IoT platform with AI built in. Works with ESP32.",
     "keywords": [
         "iot",
         "mqtt",
-        "esp8266",
         "esp32",
-        "firmngin"
+        "firmngin",
+        "ai",
+        "device billing"
     ],
     "repository": {
         "type": "git",
@@ -15,8 +16,8 @@
     },
     "authors": [
         {
-            "name": "Firmngin",
-            "email": "dev@firmngin.dev"
+            "name": "Arif at Firmngin",
+            "email": "team@firmngin.dev"
         }
     ],
     "license": "MIT",
@@ -24,7 +25,6 @@
         "arduino"
     ],
     "platforms": [
-        "espressif8266",
         "espressif32"
     ]
 }

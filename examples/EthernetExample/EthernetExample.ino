@@ -1,81 +1,71 @@
 /*
  * Firmngin Ethernet Example
  *
- * Example of using setClient() for Ethernet connection
- * Supports: W5500, ENC28J60, or other Ethernet Shields
+ * Brings up Ethernet through the ESP32 core (lwIP), then starts Firmngin.
+ * MQTT uses that interface directly. There is no EthernetClient to inject.
  *
- * website: https://firmngin.dev
- * author: (Arif) Firmngin.dev
+ * W5500 (SPI) needs Arduino-ESP32 3.x. A PHY on the internal MAC (LAN8720,
+ * RTL8201, and similar) also works on core 2.0.x — use the begin() below it.
+ * If the build exceeds the app partition, select a larger scheme (Huge APP).
  */
 
 #include "keys.h"
 #include <firmngin.h>
+#include <ETH.h>
+#if ESP_ARDUINO_VERSION_MAJOR >= 3
 #include <SPI.h>
-#include <Ethernet.h>
-
-
-#if defined(ESP8266)
-Firmngin fngin(DEVICE_ID, DEVICE_KEY, CLIENT_CERT, PRIVATE_KEY, SERVER_FINGERPRINT_BYTES);
-#elif defined(ESP32)
-Firmngin fngin(DEVICE_ID, DEVICE_KEY, SERVER_FINGERPRINT_BYTES, CLIENT_CERT, PRIVATE_KEY);
 #endif
 
+Firmngin fngin(DEVICE_ID, DEVICE_KEY);
 
-// MAC Address (can be changed as needed)
-byte mac[] = { 0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0xED };
+#if ESP_ARDUINO_VERSION_MAJOR >= 3
+static const int ETH_SCK = 18;
+static const int ETH_MISO = 19;
+static const int ETH_MOSI = 23;
+static const int ETH_CS = 5;
+static const int ETH_IRQ = 4;
+static const int ETH_RST = 14;
+#endif
 
-// Ethernet Client
-EthernetClient ethClient;
-
-// Entity keys for relay control
 Entity relay1(1);
 Entity relay2(2);
 
 ON_ENTITY(relay1, [](EntityCommand &cmd) {
-  digitalWrite(2, cmd.value() == "1" ? HIGH : LOW);
+    digitalWrite(2, cmd.value() == "1" ? HIGH : LOW);
 });
 
 ON_ENTITY(relay2, [](EntityCommand &cmd) {
-  digitalWrite(4, cmd.value() == "1" ? HIGH : LOW);
+    digitalWrite(4, cmd.value() == "1" ? HIGH : LOW);
 });
 
 void setup()
 {
-  Serial.begin(115200);
-  Serial.println("Firmngin Ethernet Example");
+    Serial.begin(115200);
+    pinMode(2, OUTPUT);
+    pinMode(4, OUTPUT);
 
-  pinMode(2, OUTPUT);
-  pinMode(4, OUTPUT);
+#if ESP_ARDUINO_VERSION_MAJOR >= 3
+    SPI.begin(ETH_SCK, ETH_MISO, ETH_MOSI);
+    ETH.begin(ETH_PHY_W5500, 1, ETH_CS, ETH_IRQ, ETH_RST, SPI);
+#else
+    // Core 2.0.x ETH API is the internal MAC. Pins: addr, power, mdc, mdio, phy, clock.
+    ETH.begin(1, 16, 23, 18, ETH_PHY_LAN8720, ETH_CLOCK_GPIO0_IN);
+#endif
 
-  // Initialize Ethernet with DHCP
-  Serial.print("Initializing Ethernet with DHCP...");
-  if (Ethernet.begin(mac) == 0) {
-    Serial.println("Failed!");
-    
-    // If DHCP fails, try with static IP
-    IPAddress ip(192, 168, 1, 100);
-    IPAddress dns(8, 8, 8, 8);
-    IPAddress gateway(192, 168, 1, 1);
-    IPAddress subnet(255, 255, 255, 0);
-    Ethernet.begin(mac, ip, dns, gateway, subnet);
-    
-    Serial.print("Using static IP: ");
-    Serial.println(Ethernet.localIP());
-  } else {
-    Serial.println("OK!");
-    Serial.print("IP Address: ");
-    Serial.println(Ethernet.localIP());
-  }
+    Serial.print("Waiting for Ethernet IP");
+    while (ETH.localIP() == IPAddress(0, 0, 0, 0))
+    {
+        delay(250);
+        Serial.print(".");
+    }
+    Serial.println();
+    Serial.println(ETH.localIP());
 
-  // Set custom Ethernet client
-  fngin.setClient(ethClient);
-
-  fngin.begin();
+    fngin.setDebug(true);
+    fngin.begin();
 }
 
 void loop()
 {
-  // Maintain Ethernet connection
-  Ethernet.maintain();
-  fngin.loop();
+    fngin.loop();
 }

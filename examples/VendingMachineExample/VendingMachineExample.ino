@@ -20,11 +20,7 @@
 #include <Arduino.h>
 #include <firmngin.h>
 
-#if defined(ESP8266)
-#include <ESP8266WiFi.h>
-#elif defined(ESP32)
 #include <WiFi.h>
-#endif
 
 const char *ssid = "YOUR_SSID";
 const char *password = "YOUR_PASSWORD";

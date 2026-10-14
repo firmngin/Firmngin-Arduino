@@ -17,13 +17,13 @@
 // =========================================================================
 
 // Mode 1: CA Certificate: Full chain validation
-// Recommended for: ESP32, Production environments
+// Recommended for production
 // Pros: Highest security, auto-renew safe, supports CRL revocation
 // Cons: Uses more memory
 // #define USE_CA_CERT
 
 // Mode 2: Fingerprint: SHA1 server validation
-// Recommended for: ESP8266, Prototypes
+// Recommended for prototypes
 // Pros: Lightweight, memory efficient
 // Cons: Must update if server certificate changes
 // #define USE_FINGERPRINT
@@ -36,14 +36,14 @@
 #endif
 
 // =========================================================================
-// MQTT SERVER CONFIGURATION (Optional)
+// SERVER CONFIGURATION (Optional)
 // =========================================================================
 // Default: asia-jkt1.firmngin.dev:58884
 // Uncomment to use custom server:
 // #define FIRMNGIN_BROKER_ADDR "192.168.1.100"
 // #define FIRMNGIN_BROKER_PORT 1883
 
-// Development only — plain MQTT without TLS (never use in production)
+// Development only — plain connection without TLS (never use in production)
 // #define FIRMNGIN_NO_TLS 1
 
 // =========================================================================
@@ -58,7 +58,7 @@
 // Arduino CLI:
 //   --build-property "build.extra_flags=-DFIRMNGIN_FIRMWARE_VERSION=\"1.2.0\""
 //
-// TARGET_BOARD is auto-detected (ESP32/ESP8266), no config needed.
+// TARGET_BOARD is auto-detected, no config needed.
 // API_BASE_URL defaults to ota.firmngin.dev; override only for self-hosted:
 //   build_flags = -D FIRMNGIN_API_BASE_URL=\"https://custom.api.com/api/v1\"
 // OTA_BASE_URL defaults to ota.firmngin.dev; override only for self-hosted:

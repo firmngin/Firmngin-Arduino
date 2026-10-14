@@ -8,8 +8,7 @@
  * 1. Generate keys.h from firmngin dashboard or cert-gen API
  * 2. Copy keys.h to this sketch folder and set DEVICE_ID / DEVICE_KEY
  * 3. Choose validation mode in keys.h:
- *    - #define USE_CA_CERT     (recommended for ESP32)
- *    - #define USE_FINGERPRINT (recommended for ESP8266)
+ *    - #define USE_CA_CERT     (recommended)
  *
  * See README.md for complete setup instructions.
  */
@@ -17,11 +16,7 @@
 #include <Arduino.h>
 #include <firmngin.h>
 
-#if defined(ESP8266)
-#include <ESP8266WiFi.h>
-#elif defined(ESP32)
 #include <WiFi.h>
-#endif
 
 // WiFi credentials
 const char *ssid = "YOUR_SSID";
@@ -59,11 +54,7 @@ void setup()
   // Enable debug output
   fngin.setDebug(true);
 
-#if defined(ESP8266)
-  fngin.setFirmwareInfo("1.0.0", "ESP8266", "esp8266:esp8266:generic");
-#else
   fngin.setFirmwareInfo("1.0.0", "ESP32", "esp32:esp32:esp32");
-#endif
 
   // Set timezone (GMT+7 for Indonesia)
   fngin.setTimezone(7);

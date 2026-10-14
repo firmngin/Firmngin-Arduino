@@ -1,17 +1,19 @@
-#ifndef FIRMNGINKIT_H
+#if !defined(FIRMNGINKIT_H)
 #define FIRMNGINKIT_H
 
 #include <Arduino.h>
-#include "PubSubClient/PubSubClient.h"
 #if __has_include("firmngin_version.h")
 #include "firmngin_version.h"
 #endif
 
-#ifndef FIRMNGIN_VERSION
+#if !defined(FIRMNGIN_VERSION)
 #define FIRMNGIN_VERSION "0.0.0"
 #endif
 #include "json.h"
 #include "ota_rollback.h"
+#include "audio_stream_protocol.h"
+#include "firmngin_i2s.h"
+#include "md5.h"
 #include <time.h>
 #include <map>
 #include <vector>
@@ -23,25 +25,32 @@
 
 #if defined(ESP32)
 #include <mbedtls/gcm.h>
-#elif defined(ESP8266)
-#include <ChaChaPoly.h>
 #endif
 
-#if defined(ESP8266)
-#include <ESP8266WiFi.h>
-#include <ESP8266HTTPClient.h>
-#include <WiFiClientSecure.h>
-#include <bearssl/bearssl_hash.h>
-#include <LittleFS.h>
-#define PLATFORM_SUPPORTED true
-#define PLATFORM_NAME "ESP8266"
-#define FIRMWARE_BUFFER_SIZE 4096
-#elif defined(ESP32)
+#if defined(ESP32)
 #include <WiFi.h>
 #include <HTTPClient.h>
 #include <WiFiClientSecure.h>
 #include <mbedtls/md.h>
 #include <LittleFS.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/queue.h>
+#include <freertos/semphr.h>
+#include <freertos/stream_buffer.h>
+#include <mqtt_client.h>
+#if ESP_ARDUINO_VERSION_MAJOR >= 3
+#include "esp_websocket_client_vendored.h" // vendored: core 3.x stopped bundling this IDF component
+#else
+#include <esp_websocket_client.h> // bundled with Arduino-ESP32 2.0.x
+#endif
+// The chunk callback hands the sketch I2S-ready PCM, so the matching I2S driver
+// header comes from the library: core 3.x moved to the std driver, 2.0.x keeps the
+// legacy one. The sketch only configures pins and writes frames.
+#if ESP_ARDUINO_VERSION_MAJOR >= 3
+#include <driver/i2s_std.h>
+#else
+#include <driver/i2s.h>
+#endif
 #define PLATFORM_SUPPORTED true
 #define PLATFORM_NAME "ESP32"
 #define FIRMWARE_BUFFER_SIZE 8192
@@ -51,7 +60,7 @@
 #define FIRMWARE_BUFFER_SIZE 2048
 #endif
 
-// Persistent queue (LITTLEFS-backed circular buffer for offline publish retry)
+// Persistent queue (LITTLEFS-backed circular buffer for offline message retry)
 #define FIRMNGIN_QUEUE_FILE_NAME "/firmngin_q.dat"
 #define FIRMNGIN_QUEUE_MAGIC 0x464E5151U
 #define FIRMNGIN_QUEUE_VERSION 1
@@ -64,13 +73,28 @@
 #define FIRMNGIN_QUEUE_MAX_CAPACITY 128
 #define FIRMNGIN_QUEUE_DRAIN_INTERVAL_MS 5000UL
 
-// User-managed MQTT stack (separate broker). Exposes vendored PubSubClient via mqttClient().
-// Platform MQTT (_mqttClient) also uses PubSubClient — Firmngin is built on that dependency.
-#ifndef FIRMNGIN_MQTT_CLIENT_DEFAULT_BUFFER_SIZE
-#define FIRMNGIN_MQTT_CLIENT_DEFAULT_BUFFER_SIZE 512
+// Second server connection, same bundled client as the platform one.
+#if !defined(FIRMNGIN_MQTT_CLIENT_DEFAULT_BUFFER_SIZE)
+#define FIRMNGIN_MQTT_CLIENT_DEFAULT_BUFFER_SIZE 1024
 #endif
 
-// Default MQTT Server Configuration
+typedef std::function<void(const char *topic, const uint8_t *payload, unsigned int length)> MqttMessageHandler;
+
+// Message Error Codes
+#define FMSG_ERR_NONE 0
+#define FMSG_ERR_QUEUE_FULL 1001
+#define FMSG_ERR_CONN_REFUSED 1002
+#define FMSG_ERR_CONN_TIMEOUT 1003
+#define FMSG_ERR_TLS_HANDSHAKE 1004
+#define FMSG_ERR_TLS_CERT_VERIFY 1005
+#define FMSG_ERR_TCP_CONNECT 1006
+#define FMSG_ERR_DNS_LOOKUP 1007
+#define FMSG_ERR_MESSAGE_TOO_LARGE 1008
+#define FMSG_ERR_BUFFER_OVERFLOW 1009
+#define FMSG_ERR_MUTEX_TIMEOUT 1010
+#define FMSG_ERR_UNKNOWN 1999
+
+// Default Server Configuration
 #define DEFAULT_MQTT_SERVER "asia-jkt1.firmngin.dev"
 #define DEFAULT_MQTT_PORT 58884
 
@@ -86,70 +110,74 @@
 #warning "keys.h not found — copy keys.h.template to your sketch folder and set DEVICE_ID / DEVICE_KEY"
 #endif
 
-#ifndef DEVICE_ID
+#if !defined(DEVICE_ID)
 #if !(defined(FIRMNGIN_FACTORY_SERIAL) && (FIRMNGIN_FACTORY_SERIAL != 0))
 #warning "DEVICE_ID not defined in keys.h"
 #endif
 #define DEVICE_ID "YOUR_DEVICE_ID"
 #endif
 
-#ifndef DEVICE_KEY
+#if !defined(DEVICE_KEY)
 #if !(defined(FIRMNGIN_FACTORY_SERIAL) && (FIRMNGIN_FACTORY_SERIAL != 0))
 #warning "DEVICE_KEY not defined in keys.h"
 #endif
 #define DEVICE_KEY "YOUR_DEVICE_SECRET_KEY"
 #endif
 
-#ifndef FIRMNGIN_BROKER_ADDR
-#ifdef FIRMNGIN_SERVER_ADDR
+#if !defined(FIRMNGIN_BROKER_ADDR)
+#if defined(FIRMNGIN_SERVER_ADDR)
 #define FIRMNGIN_BROKER_ADDR FIRMNGIN_SERVER_ADDR
 #else
 #define FIRMNGIN_BROKER_ADDR DEFAULT_MQTT_SERVER
 #endif
 #endif
 
-#ifndef FIRMNGIN_BROKER_PORT
-#ifdef FIRMNGIN_SERVER_PORT
+#if !defined(FIRMNGIN_BROKER_PORT)
+#if defined(FIRMNGIN_SERVER_PORT)
 #define FIRMNGIN_BROKER_PORT FIRMNGIN_SERVER_PORT
 #else
 #define FIRMNGIN_BROKER_PORT DEFAULT_MQTT_PORT
 #endif
 #endif
 
-#ifndef FIRMNGIN_SERVER_ADDR
+#if !defined(FIRMNGIN_SERVER_ADDR)
 #define FIRMNGIN_SERVER_ADDR FIRMNGIN_BROKER_ADDR
 #endif
 
-#ifndef FIRMNGIN_SERVER_PORT
+#if !defined(FIRMNGIN_SERVER_PORT)
 #define FIRMNGIN_SERVER_PORT FIRMNGIN_BROKER_PORT
 #endif
 
-#ifndef FIRMNGIN_DEV_NO_TLS
+#if !defined(FIRMNGIN_DEV_NO_TLS)
 #define FIRMNGIN_DEV_NO_TLS 0
 #endif
 
-#ifndef FIRMNGIN_NO_TLS
+#if !defined(FIRMNGIN_NO_TLS)
 #define FIRMNGIN_NO_TLS FIRMNGIN_DEV_NO_TLS
 #endif
 
-#ifndef FIRMNGIN_FIRMWARE_VERSION
+#if !defined(FIRMNGIN_FIRMWARE_VERSION)
 #define FIRMNGIN_FIRMWARE_VERSION "0.0.0"
 #endif
 
-#ifndef FIRMNGIN_FIRMWARE_TARGET_BOARD
+#if !defined(FIRMNGIN_FIRMWARE_TARGET_BOARD)
 #define FIRMNGIN_FIRMWARE_TARGET_BOARD PLATFORM_NAME
 #endif
 
-#ifndef FIRMNGIN_FIRMWARE_TARGET_MODEL
+#if !defined(FIRMNGIN_FIRMWARE_TARGET_MODEL)
 #define FIRMNGIN_FIRMWARE_TARGET_MODEL ""
 #endif
 
-#ifndef FIRMNGIN_API_BASE_URL
+#if !defined(FIRMNGIN_API_BASE_URL)
 #define FIRMNGIN_API_BASE_URL "https://ota.firmngin.dev/api/v1"
 #endif
 
-#ifndef FIRMNGIN_OTA_BASE_URL
+#if !defined(FIRMNGIN_OTA_BASE_URL)
 #define FIRMNGIN_OTA_BASE_URL "https://ota.firmngin.dev/api/v1/ota"
+#endif
+
+#if !defined(FIRMNGIN_AUDIO_STREAM_BASE_URL)
+#define FIRMNGIN_AUDIO_STREAM_BASE_URL "https://astream.firmngin.dev"
 #endif
 
 #define OK "on_ok"
@@ -242,6 +270,32 @@ public:
     String metadata() const { return _rawPayload; }
 };
 
+// Terminal QR wire abbreviations: st=status, amt=amount, od=order id (UUID),
+// oc=order code, qr=raw QRIS content, exp=expiry; rid=request id (device
+// request only).
+// Raw QRIS content and payment lifecycle. Rendering belongs to the device UI.
+class TerminalQR
+{
+public:
+    String orderId;
+    String orderCode;
+    String status;
+    String amount;
+    String qrString;
+    String expiresAt;
+
+    explicit TerminalQR(const String &payload);
+    bool isValid() const { return orderCode.length() > 0 || status.length() > 0; }
+    bool isPending() const { return status == "pending"; }
+    bool isPaid() const { return status == "paid"; }
+    bool isIdle() const { return status == "idle"; }
+    // A failure code arrives in status; there is no separate error field.
+    bool hasError() const { return status.length() > 0 && status != "pending" && status != "paid" && status != "expired" && status != "canceled" && status != "idle"; }
+    // A request rejection carries no od, so it stays a hasError() on the general
+    // QR callback and never reports an ended transaction.
+    bool isFailed() const { return orderCode.length() > 0 && (status == "expired" || status == "canceled" || hasError()); }
+};
+
 // Typed payload for payment flow
 class Payments
 {
@@ -277,7 +331,7 @@ public:
     void setPaymentType(bool postPaid) { _isPostPaid = postPaid; _isPrePaid = !postPaid; }
 };
 
-#ifndef FIRMNGIN_DISPENSE_MAX_ITEMS
+#if !defined(FIRMNGIN_DISPENSE_MAX_ITEMS)
 #define FIRMNGIN_DISPENSE_MAX_ITEMS 20
 #endif
 
@@ -371,6 +425,9 @@ private:
     String _entitiesJson;
     String _merchantStatus;
     String _activeOrderId;
+    // The audio_output entity's value: this device's stream endpoint, when the device
+    // has one.
+    String _audioStreamUrl;
     int _verificationFlag;
     int _modeFlag;
     int _kioskFlag;
@@ -386,6 +443,9 @@ public:
     String entities() const { return _entitiesJson; }
     String merchantStatus() const { return _merchantStatus; }
     String activeOrderId() const { return _activeOrderId; }
+    // wss:// endpoint from the t=6 (audio_output) entity, empty when the device has
+    // none. The server owns the host and path prefix, so this beats the derived URL.
+    String audioStreamUrl() const { return _audioStreamUrl; }
     int verificationFlag() const { return _verificationFlag; }
     String metadata() const { return _rawPayload; }
 
@@ -399,8 +459,9 @@ public:
     bool isPinEnabled() const { return _verificationFlag == 1 || _verificationFlag == 3; }
     bool isPreconditionEnabled() const { return _verificationFlag == 2 || _verificationFlag == 3; }
     bool isVerificationRequired() const { return _verificationFlag > 0; }
-    bool isServiceMode() const { return _modeFlag != 2; }
+    bool isServiceMode() const { return _modeFlag == 1; }
     bool isVendingMode() const { return _modeFlag == 2; }
+    bool isTerminalMode() const { return _modeFlag == 3; }
     bool isKiosk() const { return _kioskFlag == 1; }
     bool isDeviceLocalEndEnabled() const { return _kioskFlag == 1 && _deviceLocalEndFlag == 1; }
 };
@@ -431,12 +492,62 @@ typedef std::function<void(DeviceState)> StateCallbackFunction;
 typedef std::function<void(Verifications &)> VerificationCallbackFunction;
 typedef std::function<void(Payments &)> PaymentCallbackFunction;
 typedef std::function<void(Dispenses &)> DispenseCallbackFunction;
+typedef std::function<void(TerminalQR &)> TerminalQRCallbackFunction;
 typedef std::function<void(Usages &)> UsageCallbackFunction;
 typedef std::function<void(DeviceStates &)> DeviceStateCallbackFunction;
 typedef std::function<void(Inits &)> InitCallbackFunction;
 typedef std::function<void(EntityCommand &)> EntityCommandCallbackFunction;
 typedef std::function<void(ActiveSession &)> ActiveSessionCallbackFunction;
 typedef std::function<void(const char *status, const char *message)> OTACallbackFunction;
+
+// Audio playback model (ESP32):
+//   WebSocket task → reassembles 640 B mono frames → ring buffer (non-blocking
+//                    enqueue: if the ring is full one frame is dropped so this
+//                    task can keep reading — otherwise audio.flush on stop never
+//                    arrives and the gateway tears down the socket)
+//   loop()         → drains the ring into I2S. Call loop() often.
+//   Clean audio.end → drain queued samples and fade the final frame to silence.
+//   flush / disconnect → bump generation, reset ring, fade the short I2S DMA tail.
+#define FIRMNGIN_AUDIO_BUFFER_FRAMES 48
+#define FIRMNGIN_AUDIO_FRAMES_PER_LOOP 8
+#define FIRMNGIN_AUDIO_TAIL_SILENCE_FRAMES 2
+#define FIRMNGIN_AUDIO_EVENT_QUEUE_LEN 8
+#define FIRMNGIN_AUDIO_WS_BUFFER_BYTES 1024
+#define FIRMNGIN_AUDIO_WS_TASK_STACK 4096
+#define FIRMNGIN_AUDIO_INPUT_TASK_STACK 6144
+#define FIRMNGIN_AUDIO_INPUT_MAX_MS 30000UL
+// How long openAudioStream waits for the first NTP sync (started by begin()) before
+// signing the stream connection fails with a clear error.
+#define FIRMNGIN_NTP_SYNC_TIMEOUT_MS 15000
+// Longest stream URL an init entity may carry in its value.
+#define FIRMNGIN_AUDIO_STREAM_URL_MAX 160
+
+struct FirmnginAudioConfig
+{
+    // nullptr / empty URL derives this device's endpoint from provisioning. A nullptr
+    // token uses the provisioned token; an empty token explicitly sends no bearer.
+    const char *url = nullptr;
+    const char *token = nullptr;
+
+    // Ring capacity in 20 ms mono frames (~960 ms at 48).
+    uint8_t bufferFrames = FIRMNGIN_AUDIO_BUFFER_FRAMES;
+    // Max frames drained per loop() pass. Raise if loop() is called infrequently.
+    uint8_t framesPerLoop = FIRMNGIN_AUDIO_FRAMES_PER_LOOP;
+    uint16_t websocketBufferBytes = FIRMNGIN_AUDIO_WS_BUFFER_BYTES;
+    uint16_t websocketTaskStack = FIRMNGIN_AUDIO_WS_TASK_STACK;
+
+    // Deprecated no-op kept so existing sketches compile.
+    uint16_t backpressureMs = 0;
+};
+
+// Receives one I2S-ready 16 kHz signed-16 stereo frame (L/R interleaved, 20 ms,
+// AUDIO_PLAYBACK_FRAME_BYTES). The wire stays mono; Firmngin duplicates each
+// sample internally to avoid ESP32's 16-bit mono TX sample reordering.
+typedef std::function<bool(const uint8_t *data, size_t len)> AudioChunkCallbackFunction;
+typedef std::function<void(FirmnginAudioEvent event, const char *detail)> AudioStreamEventCallbackFunction;
+
+// One ON_AUDIO registration: server entity key -> stream event handler.
+typedef std::pair<String, AudioStreamEventCallbackFunction> AudioEntityRegEntry;
 
 typedef std::pair<String, StateCallbackFunction> StateRegEntry;
 typedef std::pair<String, EntityCommandCallbackFunction> EntityRegEntry;
@@ -504,6 +615,12 @@ inline std::vector<StateRegEntry> &deferredStateRegistrations()
 inline std::vector<EntityRegEntry> &deferredEntityRegistrations()
 {
     static std::vector<EntityRegEntry> registrations;
+    return registrations;
+}
+
+inline std::vector<AudioEntityRegEntry> &deferredAudioEntityRegistrations()
+{
+    static std::vector<AudioEntityRegEntry> registrations;
     return registrations;
 }
 
@@ -596,6 +713,14 @@ inline std::vector<OTACallbackFunction> &deferredOTAStatusRegistrations()
 #define ON_ENTITY_S(key, handler) \
     static const bool FNGIN_CONCAT(_fngin_entity_reg_, __LINE__) = ([]() {  \
         deferredEntityRegistrations().emplace_back(key, handler);            \
+        return true; })();
+
+// Register an entity as this device's audio output. The handler gets the stream event
+// and the entity_key the clip targets. Binding arms the stream (connect + standby) like
+// a registered setAudioInterface(entity, chip).
+#define ON_AUDIO(entity, handler) \
+    static const bool FNGIN_CONCAT(_fngin_audio_reg_, __LINE__) = ([]() {  \
+        deferredAudioEntityRegistrations().emplace_back(entity.key(), handler); \
         return true; })();
 
 #define ON_ENTITIES(entityCommandVar) \
@@ -806,10 +931,7 @@ public:
 class Firmngin
 {
 public:
-#if defined(ESP8266)
-    Firmngin(const char *deviceId, const char *deviceKey);
-    Firmngin(const char *deviceId, const char *deviceKey, const char *clientCert, const char *privateKey, const uint8_t *fingerprint);
-#elif defined(ESP32)
+#if defined(ESP32)
     Firmngin(const char *deviceId, const char *deviceKey);
     Firmngin(const char *deviceId, const char *deviceKey, const char *caCert, const char *clientCert, const char *privateKey);
     Firmngin(const char *deviceId, const char *deviceKey, const uint8_t *fingerprint, const char *clientCert, const char *privateKey);
@@ -825,20 +947,33 @@ public:
     void setTimezone(int timezone);
     void setDaylightOffsetSec(int daylightOffsetSec);
     void setNtpServer(const char *ntpServer);
-    void setClient(Client &client);
     void setBrokerServer(const char *server, int port, bool noTls = (FIRMNGIN_NO_TLS != 0));
     void setInsecure(bool insecure = true);
     bool isPlatformSupported();
 
-    PubSubClient &mqttClient();
-    Client &mqttTransport();
-    void mqttClientPrepare();
+    // Second server connection on the bundled client. Auto-reconnect, QoS 1 send,
+    // persistent session. Listening is set up before or after begin, and restored
+    // on every reconnect. Messages are delivered from loop().
+    // TLS verifies caCert. Without a CA, call mqttClientSetInsecure(true) first.
     void mqttClientSetBufferSize(uint16_t size);
     void mqttClientSetInsecure(bool insecure = true);
+    bool mqttClientBegin(const char *host, uint16_t port,
+                         const char *clientId, const char *user, const char *pass,
+                         const char *willTopic, const char *willMessage,
+                         MqttMessageHandler onMessage, bool tls = true,
+                         const char *caCert = nullptr);
+    bool mqttClientSubscribe(const char *topic, int qos = 1);
+    bool mqttClientPublish(const char *topic, const char *payload, bool retained = false);
+    bool mqttClientConnected() const;
     void mqttClientLoop();
     void mqttClientDisconnect();
 
-    // Persistent offline publish queue (LITTLEFS-backed)
+    // Message queue monitoring
+    uint32_t getDroppedMessageCount() const;
+    uint32_t getReconnectCount() const;
+    void resetMessageStats();
+
+    // Persistent queue for messages sent while offline (LITTLEFS-backed)
     void setQueueEnabled(bool enabled = true);
     void setMaxQueueEntries(uint16_t maxEntries);
     uint16_t getQueueSize() const;
@@ -855,6 +990,59 @@ public:
     void on(DeviceStateType state, EntityCommandCallbackFunction callback);
     void on(DeviceStateType state, ActiveSessionCallbackFunction callback);
     void onEntity(const char *key, EntityCommandCallbackFunction callback);
+
+    // Audio reaches a device over one persistent WebSocket, not a URL per clip: the
+    // backend streams PCM down it and a newer clip cancels the one still playing.
+    // openAudioStream() takes the endpoint and bearer token from the device's
+    // provisioning bundle. Frames are drained from loop() into I2S (so the callback
+    // may block on the hardware clock); control events also surface there. The
+    // callback receives an I2S-ready interleaved stereo frame, not the mono wire frame.
+    // onChunk / onEvent are optional: if a speaker was registered via
+    // setAudioInterface(entity, chip), PCM is written there automatically when
+    // onChunk is omitted.
+    bool openAudioStream(AudioChunkCallbackFunction onChunk = nullptr,
+                         AudioStreamEventCallbackFunction onEvent = nullptr);
+    bool openAudioStream(const FirmnginAudioConfig &config,
+                         AudioChunkCallbackFunction onChunk = nullptr,
+                         AudioStreamEventCallbackFunction onEvent = nullptr);
+    bool openAudioStream(const char *url, const char *token,
+                         AudioChunkCallbackFunction onChunk = nullptr,
+                         AudioStreamEventCallbackFunction onEvent = nullptr);
+    void closeAudioStream();
+    bool isAudioStreamConnected() const;
+
+    // With a speaker registered via setAudioInterface(entity, chip), the stream is
+    // automatic: begin() arms it and loop() connects once the clock is synced, so the
+    // device just connects and stands by. enableAudioStream() re-arms after
+    // closeAudioStream(), and the optional onEvent replaces the Serial error report.
+    void enableAudioStream(AudioStreamEventCallbackFunction onEvent = nullptr);
+
+    // Bind a server entity key to the audio stream: a clip whose control frame carries
+    // that entity_key reaches `handler`, and playback state is reported back on the
+    // key. ON_AUDIO() is the declarative form of this.
+    Firmngin &bindAudioEntity(const char *key, AudioStreamEventCallbackFunction handler);
+
+    // Register a named audio output bound to a server entity: clips whose control
+    // frame carries that entity_key play here. Returns the I2S handle for fluent
+    // config (pins/sampleRate/dma/mclk). Hardware survives closeAudioStream().
+    // This is the only way to configure audio output — every speaker must be bound
+    // to an entity, there is no unnamed default or unknown-key fallback.
+    //   Entity speaker1("speaker1");
+    //   fngin.setAudioInterface(speaker1, MAX98357A).pins(BCLK, LRC, DOUT);
+    FirmnginI2s &setAudioInterface(const Entity &entity, FirmnginI2sChip chip);
+    FirmnginI2s &setAudioInterface(const char *key, FirmnginI2sChip chip);
+
+    // Bind an audio_input entity to an I2S microphone. Capture is explicit:
+    // startAudioInput() streams one recording over the device's existing WSS,
+    // and stopAudioInput() finalizes and saves it. Only one microphone may
+    // record at a time. INMP441 defaults to its left slot; call .channel() when
+    // the module's L/R pin is tied HIGH.
+    FirmnginI2s &setAudioInput(const Entity &entity, FirmnginI2sChip chip = INMP441);
+    FirmnginI2s &setAudioInput(const char *key, FirmnginI2sChip chip = INMP441);
+    bool startAudioInput(const Entity &entity);
+    bool startAudioInput(const char *key);
+    void stopAudioInput();
+    bool isAudioInputRecording() const;
 
     bool pushEntity(const char *key, const char *value);
     bool pushEntity(const char *key, const String &value);
@@ -879,6 +1067,21 @@ public:
     EntityValue entity(const Entity &entity);
     bool endSession();
     bool requestInit();
+    // Ask for a QR for an amount: sets the amount to charge and sends the
+    // request in one call. Digits only; the amount range belongs to the server,
+    // so a range rejection arrives later as a failure code in onTerminalQR.
+    // Returns nullptr once the
+    // request is sent, otherwise a short literal reason to show the
+    // operator ("amount is empty", "digits only", "amount too long",
+    // "Failed to sent message").
+    const char *setAmountTerminalQR(const String &amount);
+    // Cancel the QR this device has open. It targets this device's own
+    // transaction, so no request id is needed. The result arrives through the
+    // existing onTerminalQR/onTerminalPaymentFailed callbacks on /c/{id}/qr
+    // as st=canceled then st=idle (or a failure code).
+    bool cancelTerminalQR();
+    void onTerminalQR(TerminalQRCallbackFunction callback);
+    void onTerminalPaymentFailed(TerminalQRCallbackFunction callback);
     LocationUpdate pushLocation();
     BatchState pushBatchEntities();
     void setFirmwareInfo(const char *version, const char *targetBoard, const char *targetModel);
@@ -916,30 +1119,86 @@ private:
     String _runtimeServiceCaCert;
     String _runtimeDecryptor;
     String _apiBaseUrl = FIRMNGIN_API_BASE_URL;
+    // Audio gateway base. A provisioning record may replace the whole stream URL
+    // through _runtimeAudioStreamUrl; this is what the device falls back to.
+    String _audioStreamBaseUrl = FIRMNGIN_AUDIO_STREAM_BASE_URL;
+    String _runtimeAudioStreamUrl = "";
+    String _runtimeAudioStreamToken = "";
+    // Named audio outputs (multi-speaker). One WebSocket still carries every clip and
+    // clips play sequentially, so the active sink switches at audio.start(entity_key)
+    // and one playback FIFO serves them all.
+    struct SpeakerSink
+    {
+        String key;
+        FirmnginI2s i2s;
+    };
+    std::vector<SpeakerSink> _speakers;
+    struct MicrophoneSource
+    {
+        String key;
+        FirmnginI2s i2s;
+    };
+    std::vector<MicrophoneSource> _microphones;
+    String _activeSinkKey;
+    FirmnginI2s *_activeSink();
+    bool _writeActiveSink(const uint8_t *data, size_t len);
+    bool _anySinkReady() const;
+    bool _hasAudioInterfaceConfigured() const;
     bool _debug;
     unsigned long _lastMQTTAttempt;
 
-#if defined(ESP8266) || defined(ESP32)
+#if defined(ESP32)
     WiFiClientSecure _wifiClient;
     WiFiClient _plainWifiClient;
 #else
     WiFiClient _wifiClient;
 #endif
-    PubSubClient _mqttClient;
+#if defined(ESP32)
+    esp_mqtt_client_handle_t _mqtt = nullptr;
+    volatile bool _mqttUp = false;
+    volatile bool _mqttHelloPending = false;
+    String _mqttWillTopic;
+    QueueHandle_t _mqttInbox = nullptr;
+    SemaphoreHandle_t _mqttLock = nullptr;
+    char *_rxTopic[2] = {};
+    uint8_t *_rxData[2] = {};
+    int _rxFilled[2] = {};
+    int _rxTotal[2] = {};
 
-#if defined(ESP8266) || defined(ESP32)
-    WiFiClientSecure _userMqttTransport;
-#else
-    WiFiClient _userMqttTransport;
+    esp_mqtt_client_handle_t _userMqtt = nullptr;
+    volatile bool _userMqttUp = false;
+    bool _userMqttTls = true;
+    String _userMqttHost;
+    String _userMqttClientId;
+    String _userMqttUser;
+    String _userMqttPass;
+    String _userMqttWillTopic;
+    String _userMqttWillMsg;
+    String _userMqttCa;
+    uint16_t _userMqttPort = 0;
+    MqttMessageHandler _userMqttCallback;
+    struct UserMqttSub
+    {
+        String topic;
+        int qos;
+    };
+    std::vector<UserMqttSub> _userMqttSubs;
 #endif
-    PubSubClient _userMqttClient;
     uint16_t _userMqttBufferSize = FIRMNGIN_MQTT_CLIENT_DEFAULT_BUFFER_SIZE;
     bool _userMqttInsecure = false;
-    bool _userMqttPrepared = false;
 
     unsigned long _delayRetryMQTT = 5000;
     int maxRetryMQTT = 3;
     int defaultQos = 1;
+
+    // Message stats & monitoring
+    volatile uint32_t _msgDroppedCount = 0;
+    volatile uint32_t _msgPlatformReconnects = 0;
+    volatile uint32_t _msgUserReconnects = 0;
+    unsigned long _msgLastReconnectMs = 0;
+    unsigned long _msgReconnectBackoff = 5000;
+    const unsigned long _msgReconnectBackoffMin = 5000;
+    const unsigned long _msgReconnectBackoffMax = 60000;
 
     String _mqttServer;
     int _mqttPort;
@@ -958,7 +1217,7 @@ private:
     unsigned long _ntpSyncStartMs = 0;
     bool _ntpSynced = false;
 
-    // Persistent offline publish queue state (LITTLEFS circular buffer)
+    // Persistent offline queue state (LITTLEFS circular buffer)
     bool _queueEnabled = false;
     uint16_t _queueCapacity = FIRMNGIN_QUEUE_DEFAULT_CAPACITY;
     uint16_t _queueHead = 0;
@@ -986,6 +1245,79 @@ private:
     Preferences _otaPrefs;
 #endif
 
+    AudioChunkCallbackFunction _audioChunkCallback;
+    AudioStreamEventCallbackFunction _audioEventCallback;
+    bool _audioUsesBuiltinSink = false;
+    // entity_key -> ON_AUDIO handler, so one device stream can serve several
+    // audio_output entities.
+    std::map<String, AudioStreamEventCallbackFunction> _audioEntityCallbacks;
+    // I2S configured + not yet connected: loop() opens the stream once the clock is
+    // synced. Cleared on connect and by closeAudioStream().
+    bool _audioAutoConnect = false;
+    unsigned long _audioAutoConnectAtMs = 0;
+    // Set once an init frame has been parsed: without a provisioned URL the stream
+    // waits for it instead of guessing the derived path.
+    bool _deviceInitReceived = false;
+#if defined(ESP32)
+    esp_websocket_client_handle_t _audioWs = nullptr;
+    // Mono wire frames land here from the WebSocket task and leave from loop().
+    // Enqueue is non-blocking: a full ring drops one frame so the WS task can still
+    // read audio.flush on stop (blocking here deadlocks the socket).
+    StreamBufferHandle_t _audioRx = nullptr;
+    QueueHandle_t _audioEvents = nullptr;
+    // WEBSOCKET_EVENT_DATA fires per transport read, so one 640-byte wire frame can
+    // arrive as several chunks (payload_offset resets per read). These reassemble it
+    // before the frame-aligned FIFO.
+    uint8_t _audioPcmAccum[AUDIO_FRAME_BYTES * 2];
+    uint16_t _audioPcmAccumLen = 0;
+    // Bumped on flush/disconnect so a blocked enqueue aborts cleanly.
+    volatile uint32_t _audioFlushGen = 0;
+    // Binary frames are enqueued only while a clip is running (between audio.start
+    // and audio.end). Cleared by flush/stop/disconnect so in-flight frames left in
+    // TCP buffers after a stop are dropped instead of replaying the stopped clip.
+    volatile bool _audioStreaming = false;
+    // True after audio.end until loop() finishes draining the ring at full level.
+    bool _audioEndPending = false;
+    // The client keeps the config strings by pointer, so they must outlive init().
+    String _audioUrl;
+    String _audioHeaders;
+    String _audioToken;
+    uint8_t _audioBufferFrames = FIRMNGIN_AUDIO_BUFFER_FRAMES;
+    uint8_t _audioFramesPerLoop = FIRMNGIN_AUDIO_FRAMES_PER_LOOP;
+    uint16_t _audioWsBufferBytes = FIRMNGIN_AUDIO_WS_BUFFER_BYTES;
+    uint16_t _audioWsTaskStack = FIRMNGIN_AUDIO_WS_TASK_STACK;
+    bool _audioReconnectPending = false;
+    bool _audioKeepAlive = false;
+    unsigned long _audioReconnectAtMs = 0;
+    char _audioEndDetail[AUDIO_DETAIL_MAX] = {};
+    TaskHandle_t _audioInputTaskHandle = nullptr;
+    volatile bool _audioInputRecording = false;
+    volatile bool _audioInputStopRequested = false;
+    volatile bool _audioInputCancelRequested = false;
+    MicrophoneSource *_activeMicrophone = nullptr;
+    String _audioInputCaptureId;
+#endif
+    void _processAudio();
+    void _tryAutoConnectAudio();
+    void _applyAudioStreamUrl(const String &url);
+    void _dispatchAudioEntity(const FirmnginAudioEventMessage &message);
+    void _notifyAudioEvent(FirmnginAudioEvent event, const char *detail, const char *entityKey = nullptr);
+    String _resolveAudioStreamUrl() const;
+#if defined(ESP32)
+    void _releaseAudioQueues();
+    void _stopAudioWs();
+    void _abortAudioClip();
+    bool _enqueueAudioFrame(const uint8_t *frame, uint32_t flushGen);
+    bool _buildAudioWsHeaders();
+    bool _startAudioWsClient();
+    bool _waitForAudioClock();
+    bool _sendAudioInputControl(const char *type, const char *entityKey, const char *captureId);
+    void _finishAudioInput(bool cancelled);
+    void _runAudioInput();
+    static void _audioInputTask(void *context);
+    static void _audioWsEventHandler(void *handlerArgs, esp_event_base_t base, int32_t eventId, void *eventData);
+#endif
+
     OTAAsyncState _otaAsyncState = OTA_ASYNC_IDLE;
     HTTPClient _otaHttp;
     int _otaContentLength = 0;
@@ -997,22 +1329,11 @@ private:
 #if defined(ESP32)
     WiFiClientSecure _otaWifiClient;
     mbedtls_md_context_t _otaSha256Ctx;
-#elif defined(ESP8266)
-    BearSSL::WiFiClientSecure _otaWifiClient;
-    br_sha256_context _otaSha256Ctx;
 #endif
 
     bool otaHTTPGet(const char *path, const char *queryParams, String &responseBody);
 
-#if defined(ESP8266)
-    const char *_clientCert = nullptr;
-    const char *_privateKey = nullptr;
-    const uint8_t *_fingerprint = nullptr;
-    BearSSL::X509List *_clientCertList = nullptr;
-    BearSSL::PrivateKey *_clientPrivKey = nullptr;
-    BearSSL::X509List *_trustAnchors = nullptr;
-    BearSSL::X509List *_otaTrustAnchors = nullptr;
-#elif defined(ESP32)
+#if defined(ESP32)
     const char *_caCert = nullptr;
     const char *_clientCert = nullptr;
     const char *_privateKey = nullptr;
@@ -1023,6 +1344,9 @@ private:
     VerificationCallbackFunction _verificationCallback;
     PaymentCallbackFunction _paymentsCallback;
     DispenseCallbackFunction _dispenseCallback;
+    std::vector<TerminalQRCallbackFunction> _terminalQRCallbacks;
+    std::vector<TerminalQRCallbackFunction> _terminalPaymentFailedCallbacks;
+    uint32_t _terminalRequestSeq = 0;
     UsageCallbackFunction _usagesCallback;
     DeviceStateCallbackFunction _deviceStateCallback;
     InitCallbackFunction _initCallback;
@@ -1047,8 +1371,23 @@ private:
     std::vector<StateRegEntry> _stateCallbacks;
 
     void _Debug(String message, bool newLine = true);
+    bool _networkReady() const;
+    bool _mqttIsConnected() const;
+    bool _mqttIsStarted() const;
+    bool _mqttPublish(const char *topic, const uint8_t *data, size_t len, bool retained);
+    void _ensureMqttInbox();
+    void _drainMqttInbox();
+    void _mqttAfterConnect();
+    void _mqttShutdown();
+#if defined(ESP32)
+    friend void firmnginMqttEvent(void *arg, esp_event_base_t base, int32_t event_id, void *event_data);
+    void _onMqttEvent(esp_mqtt_event_handle_t event);
+    void _subscribePlatform();
+    void _userMqttResubscribe();
+    void _mqttPost(uint8_t which, const char *topic, const uint8_t *data, unsigned len);
+    void _mqttRxReset(uint8_t which);
+#endif
     bool connectServer();
-    void _stopMqttTransport();
     void mqttCallback(char *path, byte *payload, unsigned int length);
     String getPathPayment(String deviceId);
     String getPathDispense(String deviceId);

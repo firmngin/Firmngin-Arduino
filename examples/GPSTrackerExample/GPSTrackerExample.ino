@@ -3,7 +3,7 @@
  *
  * Minimal GPS tracker sending lat/lon via pushLocation()
  *
- * Hardware: ESP32/ESP8266 + GPS module (NEO-6M, NEO-8M, etc.) on Serial2 (ESP32) or SoftwareSerial (ESP8266)
+ * Hardware: ESP32 + GPS module (NEO-6M, NEO-8M, etc.) on Serial2
  * Dependencies: TinyGPS++ by Mikal Hart (PlatformIO: mikalhart/TinyGPSPlus)
  *
  * website: https://firmngin.dev
@@ -13,16 +13,9 @@
 #include "keys.h"
 #include <firmngin.h>
 
-#if defined(ESP8266)
-#include <ESP8266WiFi.h>
-#include <SoftwareSerial.h>
-#define GPS_BAUD 9600
-SoftwareSerial gpsSerial(D5, D6);  // RX=D5, TX=D6
-#elif defined(ESP32)
 #include <WiFi.h>
 #define GPS_BAUD 9600
 #define gpsSerial Serial2
-#endif
 
 #include <TinyGPS++.h>
 
@@ -35,7 +28,7 @@ TinyGPSPlus gps;
 Firmngin fngin(DEVICE_ID, DEVICE_KEY);
 
 unsigned long lastPublish = 0;
-const unsigned long publishInterval = 10000;  // 10 detik
+const unsigned long publishInterval = 10000;  // 10 seconds
 
 void setup() {
   Serial.begin(115200);
@@ -57,11 +50,7 @@ void setup() {
   fngin.setDebug(true);
   fngin.setTimezone(7);
 
-#if defined(ESP8266)
-  fngin.setFirmwareInfo("0.0.0", "ESP8266", "esp8266:esp8266:generic");
-#else
   fngin.setFirmwareInfo("0.0.0", "ESP32", "esp32:esp32:esp32");
-#endif
   fngin.begin();
 
   Serial.println("Waiting for GPS...");
