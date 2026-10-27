@@ -1,7 +1,7 @@
 /*
  * Firmngin Batch State Example
  *
- * Example using pushBatchEntities() to send multiple states at once
+ * Example using updateEntities() to batch only changed entity values
  *
  * website: https://firmngin.dev
  * author: (Arif) Firmngin.dev
@@ -26,8 +26,16 @@ Firmngin fngin(DEVICE_ID, DEVICE_KEY, CLIENT_CERT, PRIVATE_KEY, SERVER_FINGERPRI
 Firmngin fngin(DEVICE_ID, DEVICE_KEY, SERVER_FINGERPRINT_BYTES, CLIENT_CERT, PRIVATE_KEY);
 #endif
 
-unsigned long lastBatchPush = 0;
-const unsigned long batchInterval = 5000; // Push batch every 5 seconds
+const char *entityKeys[] = {"10", "20", "pressure", "light", "status"};
+String lastPushed[5];
+bool initReceived = false;
+bool initialPush = true;
+
+ON_INIT(init) {
+  if (!init.isValid()) return;
+  initReceived = true;
+  initialPush = true;
+}
 
 void setup()
 {
@@ -53,49 +61,26 @@ void loop()
 {
   fngin.loop();
 
-  // Push batch state every 5 seconds
-  if (millis() - lastBatchPush >= batchInterval) {
-    lastBatchPush = millis();
+  if (!initReceived) return;
 
-    // Simulate sensor readings
-    int temperature = random(20, 30);
-    int humidity = random(40, 80);
-    int pressure = random(980, 1020);
-    int light = analogRead(A0);
-    String status = "ONLINE";
+  // Replace these stable demo values with real sensor readings.
+  String values[] = {"25", "60", "1013", String(analogRead(A0)), "ONLINE"};
+  char buffer[512];
+  firmngin_json::ArrayBuilder batch(buffer, sizeof(buffer));
+  batch.reset();
 
-    bool sent = fngin.pushBatchEntities()
-      .add(10, String(temperature))      // int key, string value
-      .add(20, String(humidity))         // int key, string value
-      .add("pressure", String(pressure)) // string key, string value
-      .add("light", String(light))       // string key, string value
-      .add("status", status)             // string key, string value
-      .send();
-    
-    if (sent) {
-      Serial.println("Batch state sent successfully!");
+  // The backend keeps the last entity state. Periodic heartbeats cost usage.
+  for (int i = 0; i < 5; ++i) {
+    if (initialPush || values[i] != lastPushed[i]) {
+      if (!batch.add(entityKeys[i], values[i].c_str())) return;
     }
+  }
 
-    delay(1000);
-
-    fngin.pushBatchEntities()
-      .add(10, "ON")           // vpin 10
-      .add(20, "25.5")          // vpin 20
-      .add(30, "OFF")           // vpin 30
-      .add(40, "100")           // vpin 40
-      .send();
-
-    delay(1000);
-
-    fngin.pushBatchEntities()
-      .add("gpio_1", "1")       // string key, string value
-      .add("gpio_2", "0")       // string key, string value
-      .add(50, 128)             // int key, int value (auto convert)
-      .add(60, (double)25.5)     // int key, double value (explicit cast)
-      .add("temp", temperature) // string key, int value (auto convert)
-      .send();
-
-    Serial.println("\nWaiting for next batch push...");
+  // Use the bool-returning API so failed sends do not advance the cache.
+  if (batch.count() > 0 && fngin.updateEntities(batch.build())) {
+    for (int i = 0; i < 5; ++i) lastPushed[i] = values[i];
+    initialPush = false;
+    Serial.println("Changed entity states sent!");
   }
 
   delay(100);

@@ -862,8 +862,8 @@ static const char *STATE_NAMES[] = {
     "dpin",           // DISPLAY_PIN_NUMBER
     "vr",             // VERIFICATION_RESULT
     "ur",             // USAGE_RESPONSE
-    "le",             // LIMIT_EXCEEDED
-    "nl",             // NEAR_LIMIT
+    "le",             // Retired LIMIT_EXCEEDED; preserve enum indexing only
+    "nl",             // Retired NEAR_LIMIT; preserve enum indexing only
     "verif",          // VERIFICATIONS
     "pay",            // PAYMENTS
     "dp",             // DISPENSES
@@ -1127,7 +1127,7 @@ DeviceStates::DeviceStates(const String &jsonPayload)
     }
 }
 
-// Usages constructor: parses ur, le, or nl JSON automatically
+// Usages constructor: parses usage response (ur) JSON automatically
 Usages::Usages(const String &jsonPayload)
 {
     _valid = false;
@@ -1421,10 +1421,6 @@ bool Firmngin::connectServer()
                 snprintf(topicBuf, sizeof(topicBuf), "/c/%s/vr", _deviceId);
                 _mqttClient.subscribe(topicBuf, qosState);
                 snprintf(topicBuf, sizeof(topicBuf), "/c/%s/ur", _deviceId);
-                _mqttClient.subscribe(topicBuf, qosState);
-                snprintf(topicBuf, sizeof(topicBuf), "/c/%s/le", _deviceId);
-                _mqttClient.subscribe(topicBuf, qosState);
-                snprintf(topicBuf, sizeof(topicBuf), "/c/%s/nl", _deviceId);
                 _mqttClient.subscribe(topicBuf, qosState);
                 snprintf(topicBuf, sizeof(topicBuf), "/c/%s/mop", _deviceId);
                 _mqttClient.subscribe(topicBuf, qosState);
@@ -1810,13 +1806,11 @@ void Firmngin::mqttCallback(char *path, byte *payload, unsigned int length)
         }
     }
 
-    if ((stateType == "ur" || stateType == "le" || stateType == "nl") && (_usagesCallback || !_usageCallbacks.empty()))
+    if (stateType == "ur" && (_usagesCallback || !_usageCallbacks.empty()))
     {
         Usages u(payloadStr);
         if (u.isValid())
         {
-            u.setNearLimit(stateType == "nl");
-            u.setLimitExceeded(stateType == "le");
             if (_usagesCallback)
             {
                 _usagesCallback(u);

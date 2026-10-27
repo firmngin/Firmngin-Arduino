@@ -1,7 +1,7 @@
 /*
  * Firmngin GPS Tracker Example
  *
- * Minimal GPS tracker sending lat/lon via pushLocation()
+ * Minimal GPS tracker batching changed lat/lon via updateEntities()
  *
  * Hardware: ESP32/ESP8266 + GPS module (NEO-6M, NEO-8M, etc.) on Serial2 (ESP32) or SoftwareSerial (ESP8266)
  * Dependencies: TinyGPS++ by Mikal Hart (PlatformIO: mikalhart/TinyGPSPlus)
@@ -34,8 +34,16 @@ TinyGPSPlus gps;
 
 Firmngin fngin(DEVICE_ID, DEVICE_KEY);
 
-unsigned long lastPublish = 0;
-const unsigned long publishInterval = 10000;  // 10 detik
+String lastPushedLat;
+String lastPushedLon;
+bool initReceived = false;
+
+ON_INIT(init) {
+  if (!init.isValid()) return;
+  initReceived = true;
+  lastPushedLat = "";
+  lastPushedLon = "";
+}
 
 void setup() {
   Serial.begin(115200);
@@ -74,22 +82,24 @@ void loop() {
   while (gpsSerial.available())
     gps.encode(gpsSerial.read());
 
-  // Publish location every publishInterval
-  if (millis() - lastPublish >= publishInterval) {
-    lastPublish = millis();
+  if (!initReceived || !gps.location.isValid()) return;
 
-    if (gps.location.isValid()) {
-      fngin.pushLocation()
-        .lat(gps.location.lat())
-        .lon(gps.location.lng());
+  // Compare the same six decimals that are sent to the backend.
+  String lat(gps.location.lat(), 6);
+  String lon(gps.location.lng(), 6);
+  char buffer[192];
+  firmngin_json::ArrayBuilder batch(buffer, sizeof(buffer));
+  batch.reset();
 
-      Serial.print("Location sent: ");
-      Serial.print(gps.location.lat(), 6);
-      Serial.print(", ");
-      Serial.println(gps.location.lng(), 6);
-    } else {
-      Serial.print("No GPS fix. Satellites: ");
-      Serial.println(gps.satellites.value());
-    }
+  // The backend keeps the last entity state. Periodic heartbeats cost usage.
+  if (lat != lastPushedLat && !batch.add("lat", lat.c_str())) return;
+  if (lon != lastPushedLon && !batch.add("lon", lon.c_str())) return;
+  if (batch.count() > 0 && fngin.updateEntities(batch.build())) {
+    lastPushedLat = lat;
+    lastPushedLon = lon;
+    Serial.print("Location sent: ");
+    Serial.print(lat);
+    Serial.print(", ");
+    Serial.println(lon);
   }
 }

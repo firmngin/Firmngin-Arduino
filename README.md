@@ -65,6 +65,15 @@ Firmngin fngin(DEVICE_ID, DEVICE_KEY);
 
 Entity relay1("2");
 Entity temperature("temperature");
+String currentTemperature = "25.5"; // Replace with your sensor reading.
+String lastPushedTemperature;
+bool initReceived = false;
+
+ON_INIT(init) {
+  if (!init.isValid()) return;
+  initReceived = true;
+  lastPushedTemperature = "";
+}
 
 ON_ENTITY(relay1, [](EntityCommand &cmd) {
   digitalWrite(relayPin, cmd.value() == "1" ? HIGH : LOW);
@@ -87,11 +96,11 @@ void setup() {
 void loop() {
   fngin.loop();
 
-  // Push entity state every 10 seconds
-  static unsigned long lastPush = 0;
-  if (millis() - lastPush > 10000) {
-    lastPush = millis();
-    fngin.pushEntity(temperature, "25.5");
+  // The backend keeps the last entity state. Periodic heartbeats cost usage.
+  // Publish after INIT, then only when the sensor value changes.
+  if (initReceived && currentTemperature != lastPushedTemperature) {
+    if (fngin.pushEntity(temperature, currentTemperature))
+      lastPushedTemperature = currentTemperature;
   }
 }
 ```
@@ -117,6 +126,8 @@ Register handlers using the enum constants. Use `on(ENUM, callback)` for raw cal
 | `VERIFICATIONS`              | Typed callback: handles PIN display and verification result |
 | `PAYMENTS`                   | Typed callback: handles pending and success payments        |
 | `ENTITIES`                   | Received commands to specific entities (e.g. gpio_1)        |
+
+Usage notifications on `le` (limit exceeded) and `nl` (near limit) are retired: devices no longer subscribe to them. `ON_LIMIT_EXCEEDED(stateVar)` and `ON_NEAR_LIMIT(stateVar)` are deprecated compatibility macros that accept existing callback bodies but register nothing and never fire. Usage callbacks handle only `ur`; `Usages::setNearLimit()` and `setLimitExceeded()` remain available, and their flags default to `false`.
 
 ### Entity Commands
 
@@ -175,7 +186,9 @@ ON_ENTITY_S("status", [](EntityCommand &cmd) {
 
 ### Pushing The State
 
-Send entity state updates from your device using `pushEntity()` or `updateEntities()`. Use string keys or `Entity` objects as keys:
+Send entity state updates from your device using `pushEntity()` or `updateEntities()`. Publish an initial snapshot after `ON_INIT`, then compare each value to its last successfully pushed value and publish only changes. The backend keeps the last entity state; periodic heartbeats are unnecessary and each publish costs usage. Sample sensors as needed without publishing unchanged readings. Noisy analog or GPS readings can still change frequently, so use precision appropriate to the sensor.
+
+Use string keys or `Entity` objects as keys:
 
 ```cpp
 // Send a single state update (string key)
@@ -531,7 +544,7 @@ ON_DISPENSES(d) {
 | `on(VERIFICATIONS, callback)`                                  | Register typed callback for dpin + vr                                                                         | `void`           | `Verifications &`                           |
 | `on(PAYMENTS, callback)`                                       | Register typed callback for pp + pm                                                                           | `void`           | `Payments &`                                |
 | `on(DISPENSES, callback)`                                      | Register typed callback for vending dispense SKUs                                                             | `void`           | `Dispenses &`                               |
-| `on(USAGES, callback)`                                         | Register typed callback for ur + le + nl                                                                      | `void`           | `Usages &`                                  |
+| `on(USAGES, callback)`                                         | Register typed callback for usage responses (`ur`)                                                            | `void`           | `Usages &`                                  |
 | `on(DEVICE_STATUS, callback)`                                  | Register typed callback for ds                                                                                | `void`           | `DeviceStates &`                            |
 | `on(INIT, callback)`                                           | Register typed callback for init                                                                              | `void`           | `Inits &`                                   |
 | `on(ACTIVE_SESSION, callback)`                                 | Register active session callback                                                                              | `void`           | `ActiveSession &`                           |

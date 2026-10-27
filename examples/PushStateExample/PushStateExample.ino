@@ -1,7 +1,7 @@
 /*
  * Firmngin Push State Example
  *
- * Example using pushEntity() and pushBatchEntities() to send data to server
+ * Example using pushEntity() to send initial state and subsequent changes
  *
  * website: https://firmngin.dev
  * author: (Arif) Firmngin.dev
@@ -22,11 +22,19 @@ const char *password = "YOUR_PASSWORD";
 
 Firmngin fngin(DEVICE_ID, DEVICE_KEY);
 
-// Method 1: Direct pushEntity (manual)
-unsigned long lastManualPush = 0;
+String status = "READY";
+String lastPushedStatus;
+int lastPushedSensor = 0;
+bool statusPushed = false;
+bool sensorPushed = false;
+bool initReceived = false;
 
-// Method 2: Batch builder
-unsigned long lastBatchPush = 0;
+ON_INIT(init) {
+  if (!init.isValid()) return;
+  initReceived = true;
+  statusPushed = false;
+  sensorPushed = false;
+}
 
 void setup()
 {
@@ -49,42 +57,30 @@ void setup()
 
   fngin.setDebug(true);
   fngin.begin();
-
-  // Send initial status
-  fngin.pushEntity("status", "READY");
-  Serial.println("Initial status sent: READY");
 }
 
 void loop()
 {
   fngin.loop();
 
-  // Simulate sensor readings
-  int valueA = analogRead(A0);
-  int valueB = random(0, 100);
-  int valueC = random(0, 255);
+  if (!initReceived) return;
 
-  // Method 1: Direct pushEntity (every 10 seconds)
-  if (millis() - lastManualPush >= 10000) {
-    lastManualPush = millis();
-    String uptime = String(millis() / 1000);
-    fngin.pushEntity("uptime", uptime.c_str());
-    Serial.println("Manual push: uptime");
-  }
-
-  // Method 2: Batch push (every 5 seconds)
-  if (millis() - lastBatchPush >= 5000) {
-    lastBatchPush = millis();
-    bool sent = fngin.pushBatchEntities()
-      .add("sensor_a", String(valueA))
-      .add("sensor_b", String(valueB))
-      .add("sensor_c", String(valueC))
-      .send();
-
-    if (sent) {
-      Serial.println("Batch pushed: sensor_a, sensor_b, sensor_c");
+  // The backend keeps the last entity state. Periodic heartbeats cost usage.
+  // Send once after INIT, then only when a value differs from its last push.
+  if (!statusPushed || status != lastPushedStatus) {
+    if (fngin.pushEntity("status", status)) {
+      lastPushedStatus = status;
+      statusPushed = true;
     }
   }
 
-  delay(500);
+  int valueA = analogRead(A0);
+  if (!sensorPushed || valueA != lastPushedSensor) {
+    if (fngin.pushEntity("sensor_a", valueA)) {
+      lastPushedSensor = valueA;
+      sensorPushed = true;
+    }
+  }
+
+  delay(500); // Sensor sampling pace; unchanged values are never published.
 }

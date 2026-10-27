@@ -584,8 +584,12 @@ inline std::vector<OTACallbackFunction> &deferredOTAStatusRegistrations()
 #define ON_DISPLAY_PIN(stateVar) FNGIN_ON_STATE(DISPLAY_PIN, "dpin", stateVar)
 #define ON_VERIFICATION_RESULT(stateVar) FNGIN_ON_STATE(VERIFICATION_RESULT, "vr", stateVar)
 #define ON_USAGE_RESPONSE(stateVar) FNGIN_ON_STATE(USAGE_RESPONSE, "ur", stateVar)
-#define ON_LIMIT_EXCEEDED(stateVar) FNGIN_ON_STATE(LIMIT_EXCEEDED, "le", stateVar)
-#define ON_NEAR_LIMIT(stateVar) FNGIN_ON_STATE(NEAR_LIMIT, "nl", stateVar)
+// Deprecated: le/nl notifications are retired. Keep callback bodies compiling,
+// but register nothing, so these handlers are never dispatched.
+#define ON_LIMIT_EXCEEDED(stateVar) \
+    static inline void __attribute__((unused)) FNGIN_CONCAT(_fngin_limit_exceeded_handler_, __LINE__)(DeviceState stateVar)
+#define ON_NEAR_LIMIT(stateVar) \
+    static inline void __attribute__((unused)) FNGIN_CONCAT(_fngin_near_limit_handler_, __LINE__)(DeviceState stateVar)
 #define ON_DEVICE_STATUS_RAW(stateVar) FNGIN_ON_STATE(DEVICE_STATUS, "ds", stateVar)
 #define ON_INIT_RAW(stateVar) FNGIN_ON_STATE(INIT, "init", stateVar)
 #define ON_ENTITY(entity, handler) \

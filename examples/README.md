@@ -2,6 +2,8 @@
 
 This folder contains examples for using the Firmngin library.
 
+Entity examples publish an initial snapshot after `ON_INIT`, then only values that differ from the last successful push. The backend keeps the last entity state, so periodic heartbeats are unnecessary and cost usage. Sensor sampling and image capture intervals do not require publishing unchanged entity values.
+
 ## Setup
 
 1. **Use the shared library**: Include `<firmngin.h>` from the root `src/` folder; do not copy library files into each example
@@ -79,9 +81,9 @@ PubSubClient mqtt(net);
 - Uses device-side entity logic
 
 ### GPSTrackerExample
-- GPS tracking with TinyGPS++ and `pushLocation()`
-- Sends `lat` and `lon` every 10 seconds
-- Optional fields: `accuracy()`, `alt()`, `speed()`
+- GPS tracking with TinyGPS++ and `updateEntities()`
+- Sends initial valid `lat` and `lon` after `ON_INIT`, then only changed coordinates at six decimal places
+- Uses the bool-returning batch API to retain the last successful values for comparison
 - Compatible with NEO-6M, NEO-8M, and similar GPS modules
 
 ### AdvancedExample (Coming Soon)

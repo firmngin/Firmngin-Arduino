@@ -106,6 +106,16 @@ camera_fb_t *lastFrame = NULL;
 unsigned long lastUploadTime = 0;
 unsigned long uploadCount = 0;
 unsigned long errorCount = 0;
+String cameraStatus = "online";
+String lastCaptureSize = "0";
+String lastPushedCameraState[4];
+bool initReceived = false;
+
+ON_INIT(init) {
+    if (!init.isValid()) return;
+    initReceived = true;
+    for (int i = 0; i < 4; ++i) lastPushedCameraState[i] = "";
+}
 
 // ==================== CAMERA FUNCTIONS ====================
 
@@ -215,17 +225,15 @@ void onUploadSuccess(const char *response) {
     uploadCount++;
     Serial.printf("[UPLOAD] Success (#%lu): %s\n", uploadCount, response);
     
-    // Push upload status to entity
-    fngin.pushEntity("camera_status", "online");
-    fngin.pushEntity("last_capture_size", String(lastFrame ? lastFrame->len : 0).c_str());
+    cameraStatus = "online";
+    lastCaptureSize = String(lastFrame ? lastFrame->len : 0);
 }
 
 void onUploadError(int code, const char *message) {
     errorCount++;
     Serial.printf("[UPLOAD] Error (#%lu): %d - %s\n", errorCount, code, message);
     
-    // Push error status to entity
-    fngin.pushEntity("camera_status", "error");
+    cameraStatus = "error";
 }
 
 // ==================== AUTOMATION ENTITY ====================
@@ -316,9 +324,9 @@ void loop() {
     if (now - lastUploadTime >= UPLOAD_INTERVAL_MS) {
         lastUploadTime = now;
 
-        // Check if MQTT is connected
-        if (!fngin.isConnected()) {
-            Serial.println("[LOOP] MQTT not connected, skipping upload");
+        // Wait for platform initialization and WiFi before attempting HTTP upload.
+        if (!initReceived || WiFi.status() != WL_CONNECTED) {
+            Serial.println("[LOOP] Waiting for INIT/WiFi, skipping upload");
             return;
         }
 
@@ -350,9 +358,15 @@ void loop() {
             Serial.println("[LOOP] Capture failed");
         }
 
-        // Push camera info to entities
-        fngin.pushEntity("camera_status", "online");
-        fngin.pushEntity("upload_count", String(uploadCount).c_str());
-        fngin.pushEntity("error_count", String(errorCount).c_str());
+    }
+
+    if (!initReceived) return;
+
+    // The backend keeps the last entity state. Periodic heartbeats cost usage.
+    const char *keys[] = {"camera_status", "last_capture_size", "upload_count", "error_count"};
+    String values[] = {cameraStatus, lastCaptureSize, String(uploadCount), String(errorCount)};
+    for (int i = 0; i < 4; ++i) {
+        if (values[i] != lastPushedCameraState[i] && fngin.pushEntity(keys[i], values[i]))
+            lastPushedCameraState[i] = values[i];
     }
 }

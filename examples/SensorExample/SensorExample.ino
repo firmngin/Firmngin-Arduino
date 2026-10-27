@@ -1,7 +1,7 @@
 /*
  * Firmngin Sensor Example (DHT22)
  *
- * Example using pushEntity() and pushBatchEntities() with DHT22 sensor
+ * Example batching changed DHT22 readings with updateEntities()
  *
  * website: https://firmngin.dev
  * author: Firmngin.dev
@@ -26,9 +26,20 @@ const char *password = "YOUR_PASSWORD";
 #define DHT_TYPE DHT22
 DHT dht(DHT_PIN, DHT_TYPE);
 
-Firmngin fngin(DEVICE_ID, DEVICE_KEY);f
+Firmngin fngin(DEVICE_ID, DEVICE_KEY);
 
-unsigned long lastBatchPush = 0;
+unsigned long lastSample = 0;
+const unsigned long sampleInterval = 2000; // DHT22 sampling, not a publish timer
+const char *entityKeys[] = {"temperature", "humidity", "heat_index"};
+String lastPushed[3];
+bool initReceived = false;
+bool initialPush = true;
+
+ON_INIT(init) {
+  if (!init.isValid()) return;
+  initReceived = true;
+  initialPush = true;
+}
 
 void setup()
 {
@@ -60,6 +71,10 @@ void loop()
 {
   fngin.loop();
 
+  if (!initReceived) return;
+  if (millis() - lastSample < sampleInterval) return;
+  lastSample = millis();
+
   // Read DHT22 sensor
   float temp = dht.readTemperature();
   float hum = dht.readHumidity();
@@ -67,24 +82,29 @@ void loop()
   // Check if read failed
   if (isnan(temp) || isnan(hum)) {
     Serial.println("Failed to read from DHT sensor!");
-    delay(2000);
     return;
   }
 
   // Calculate heat index
   float hi = dht.computeHeatIndex(temp, hum, false);
 
-  // Push as a batch every 5 seconds
-  if (millis() - lastBatchPush >= 5000) {
-    lastBatchPush = millis();
-    bool sent = fngin.pushBatchEntities()
-      .add("temperature", String(temp))
-      .add("humidity", String(hum))
-      .add("heat_index", String(hi))
-      .send();
+  if (isnan(hi)) return;
 
-    if (sent) {
-      Serial.println("Batch pushed: temperature, humidity, heat_index");
+  String values[] = {String(temp), String(hum), String(hi)};
+  char buffer[256];
+  firmngin_json::ArrayBuilder batch(buffer, sizeof(buffer));
+  batch.reset();
+
+  // The backend keeps the last entity state. Periodic heartbeats cost usage.
+  for (int i = 0; i < 3; ++i) {
+    if (initialPush || values[i] != lastPushed[i]) {
+      if (!batch.add(entityKeys[i], values[i].c_str())) return;
     }
+  }
+
+  if (batch.count() > 0 && fngin.updateEntities(batch.build())) {
+    for (int i = 0; i < 3; ++i) lastPushed[i] = values[i];
+    initialPush = false;
+    Serial.println("Changed sensor readings pushed");
   }
 }

@@ -39,6 +39,16 @@ static unsigned long lastUserPublish = 0;
 static const unsigned long USER_MQTT_RETRY_MS = 5000;
 static const unsigned long USER_PUBLISH_INTERVAL_MS = 15000;
 
+String temperature = "25.5"; // Replace with the current sensor reading.
+String lastPushedTemperature;
+bool initReceived = false;
+
+ON_INIT(init) {
+    if (!init.isValid()) return;
+    initReceived = true;
+    lastPushedTemperature = "";
+}
+
 void onUserMqttMessage(char *topic, uint8_t *payload, unsigned int length)
 {
     Serial.print("[user-mqtt] ");
@@ -125,6 +135,13 @@ void loop()
 
     fngin.loop();
 
+    // The backend keeps the last entity state. Periodic heartbeats cost usage.
+    if (initReceived && temperature != lastPushedTemperature)
+    {
+        if (fngin.pushEntity("temperature", temperature))
+            lastPushedTemperature = temperature;
+    }
+
     if (!fngin.mqttClient().connected())
     {
         unsigned long now = millis();
@@ -144,7 +161,6 @@ void loop()
             lastUserPublish = now;
             String payload = "{\"temp\":25.5,\"ts\":" + String(now) + "}";
             fngin.mqttClient().publish(USER_MQTT_PUB_TOPIC, payload.c_str());
-            fngin.pushEntity("temperature", "25.5");
         }
     }
 }

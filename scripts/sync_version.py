@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Sync VERSION file to library.properties, library.json, and firmware headers."""
+"""Sync VERSION to library.properties, both library.json files, and firmware headers."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 VERSION_FILE = ROOT / "VERSION"
 LIBRARY_PROPS = ROOT / "library.properties"
-LIBRARY_JSON = ROOT / "library.json"
+LIBRARY_JSON_FILES = (ROOT / "library.json", ROOT / "src" / "library.json")
 VERSION_HEADER = ROOT / "src" / "firmngin_version.h"
 
 
@@ -34,9 +34,10 @@ def sync_properties(version: str) -> None:
 
 
 def sync_json(version: str) -> None:
-    data = json.loads(LIBRARY_JSON.read_text(encoding="utf-8"))
-    data["version"] = version
-    LIBRARY_JSON.write_text(json.dumps(data, indent=4) + "\n", encoding="utf-8")
+    for path in LIBRARY_JSON_FILES:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        data["version"] = version
+        path.write_text(json.dumps(data, indent=4) + "\n", encoding="utf-8")
 
 
 def sync_version_header(version: str) -> None:
@@ -56,10 +57,11 @@ def check_sync(version: str) -> bool:
     if not match or match.group(1).strip() != version:
         print(f"library.properties version mismatch (expected {version})")
         ok = False
-    data = json.loads(LIBRARY_JSON.read_text(encoding="utf-8"))
-    if data.get("version") != version:
-        print(f"library.json version mismatch (expected {version})")
-        ok = False
+    for path in LIBRARY_JSON_FILES:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if data.get("version") != version:
+            print(f"{path.relative_to(ROOT)} version mismatch (expected {version})")
+            ok = False
     if not VERSION_HEADER.exists():
         print(f"{VERSION_HEADER.relative_to(ROOT)} missing")
         ok = False

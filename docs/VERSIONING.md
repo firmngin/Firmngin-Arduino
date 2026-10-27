@@ -10,7 +10,7 @@ Before release or tagging:
 python3 scripts/sync_version.py
 ```
 
-CI runs `python3 scripts/sync_version.py --check` to ensure `library.properties`, `library.json`, and `src/firmngin_version.h` match `VERSION`.
+CI runs `python3 scripts/sync_version.py --check` to ensure `library.properties`, `library.json`, `src/library.json`, and `src/firmngin_version.h` match `VERSION`.
 
 ## Release workflow
 
@@ -22,7 +22,7 @@ Normal development flow:
 
 Manual release requirements:
 
-1. `VERSION`, `library.properties`, and `library.json` must already contain the release version.
+1. `VERSION`, `library.properties`, both `library.json` manifests, and `src/firmngin_version.h` must already contain the release version.
 2. The `version` workflow input must match `VERSION` exactly.
 3. The tag `vX.Y.Z` must not already exist.
 
