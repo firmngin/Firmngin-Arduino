@@ -1,15 +1,23 @@
 #include "firmngin.h"
 #include "firmngin_identity.h"
+#include "hmac.h"
+#include "http_response.h"
+#include "identity_meta.h"
+#include <stdarg.h>
 #include <math.h>
 #include <memory>
 #include <new>
-
-#if defined(ESP32)
-#include <esp_system.h>
+#include <algorithm>
+#if defined(ESP_PLATFORM) && !defined(ARDUINO)
+#include <esp_sntp.h>
 #endif
 
-#if defined(ESP32)
-#include <Update.h>
+#if defined(ESP_PLATFORM)
+#include <esp_system.h>
+#include <esp_random.h>
+#endif
+
+#if defined(ESP_PLATFORM)
 #include <esp_ota_ops.h>
 #endif
 
@@ -20,16 +28,12 @@ int DAYLIGHT_OFFSET_SEC = 0;
 const char *MQTT_SERVER_ADDR = FIRMNGIN_BROKER_ADDR;
 const int MQTT_SERVER_PORT = FIRMNGIN_BROKER_PORT;
 
-// Defined near the OTA helpers at the end of this file; the audio stream connection
-// signs its request credentials with it long before that point.
-static String hmacSHA256(const char *key, const char *message);
-
 static bool parseFingerprintHex(const String &hexValue, uint8_t out[20])
 {
     String hex = hexValue;
-    hex.replace(":", "");
-    hex.replace(" ", "");
-    hex.toUpperCase();
+    fng_replace_all(hex, ":", "");
+    fng_replace_all(hex, " ", "");
+    fng_toUpperCase(hex);
     if (hex.length() != 40)
         return false;
     for (int i = 0; i < 20; i++)
@@ -58,12 +62,12 @@ static bool validateDeviceCredentials(const char *deviceId, const char *deviceKe
     bool valid = true;
     if (deviceId == nullptr || deviceId[0] == '\0' || strcmp(deviceId, "YOUR_DEVICE_ID") == 0)
     {
-        Serial.println("ERROR: DEVICE_ID is missing or still uses the template placeholder");
+        Console.println("ERROR: DEVICE_ID is missing or still uses the template placeholder");
         valid = false;
     }
     if (deviceKey == nullptr || deviceKey[0] == '\0' || strcmp(deviceKey, "YOUR_DEVICE_SECRET_KEY") == 0)
     {
-        Serial.println("ERROR: DEVICE_KEY is missing or still uses the template placeholder");
+        Console.println("ERROR: DEVICE_KEY is missing or still uses the template placeholder");
         valid = false;
     }
     return valid;
@@ -99,7 +103,7 @@ static bool isConfiguredPEM(const char *pem, const char *beginMarker)
     return pem != nullptr && pem[0] != '\0' && strstr(pem, beginMarker) != nullptr && strstr(pem, "[Your") == nullptr;
 }
 
-#if defined(ESP32)
+#if defined(ESP_PLATFORM)
 Firmngin::Firmngin(const char *deviceId, const char *deviceKey)
     : _deviceId(deviceId),
       _deviceKey(deviceKey),
@@ -111,7 +115,7 @@ Firmngin::Firmngin(const char *deviceId, const char *deviceKey)
 {
     if (!PLATFORM_SUPPORTED)
     {
-        Serial.println("ERROR: Platform not supported");
+        Console.println("ERROR: Platform not supported");
     }
 }
 
@@ -130,7 +134,7 @@ Firmngin::Firmngin(const char *deviceId, const char *deviceKey, const char *caCe
 {
     if (!PLATFORM_SUPPORTED)
     {
-        Serial.println("ERROR: Platform not supported");
+        Console.println("ERROR: Platform not supported");
     }
 }
 
@@ -149,7 +153,7 @@ Firmngin::Firmngin(const char *deviceId, const char *deviceKey, const uint8_t *f
 {
     if (!PLATFORM_SUPPORTED)
     {
-        Serial.println("ERROR: Platform not supported");
+        Console.println("ERROR: Platform not supported");
     }
 }
 #else
@@ -164,7 +168,7 @@ Firmngin::Firmngin(const char *deviceId, const char *deviceKey)
 {
     if (!PLATFORM_SUPPORTED)
     {
-        Serial.println("ERROR: Platform not supported");
+        Console.println("ERROR: Platform not supported");
     }
 }
 #endif
@@ -172,7 +176,47 @@ Firmngin::Firmngin(const char *deviceId, const char *deviceKey)
 
 Firmngin::~Firmngin()
 {
+    _otaCleanup();
     _mqttShutdown();
+}
+
+bool Firmngin::setIdentity(const FirmnginIdentityRecord &identity)
+{
+    if (_securityReady || _otaTransfer != nullptr || identity.tlsMode != "ca" ||
+        !validateDeviceCredentials(identity.deviceId.c_str(), identity.deviceKey.c_str()) ||
+        !validateIdentityRecord(identity, false))
+        return false;
+    _applyIdentity(identity);
+    _runtimeIdentityConfigured = true;
+    return true;
+}
+
+void Firmngin::_applyIdentity(const FirmnginIdentityRecord &identity)
+{
+    _runtimeDeviceId = identity.deviceId;
+    _runtimeDeviceKey = identity.deviceKey;
+    _deviceId = _runtimeDeviceId.c_str();
+    _deviceKey = _runtimeDeviceKey.c_str();
+    _runtimeClientCert = identity.clientCert;
+    _runtimePrivateKey = identity.privateKey;
+    _runtimeCaCert = identity.caCert;
+    _runtimeServiceCaCert = identity.serviceCaCert;
+    _runtimeDecryptor = identity.decryptor;
+    _runtimeUseFingerprint = identity.tlsMode == "fingerprint";
+    _runtimeUseCA = identity.tlsMode == "ca";
+    if (identity.fingerprintHex.length() > 0)
+        _runtimeUseFingerprint = parseFingerprintHex(identity.fingerprintHex, _runtimeFingerprint);
+    if (identity.brokerAddr.length() > 0)
+        _mqttServer = identity.brokerAddr;
+    if (identity.brokerPort > 0)
+        _mqttPort = identity.brokerPort;
+    if (identity.apiBaseUrl.length() > 0)
+        _apiBaseUrl = identity.apiBaseUrl;
+    if (identity.otaBaseUrl.length() > 0)
+        _otaBaseUrl = identity.otaBaseUrl;
+    if (identity.audioStreamUrl.length() > 0)
+        _runtimeAudioStreamUrl = identity.audioStreamUrl;
+    _runtimeAudioStreamToken = identity.audioStreamToken;
 }
 
 String Firmngin::getPathPayment(String deviceId)
@@ -292,18 +336,18 @@ String Firmngin::getOTATriggerPath(String deviceId)
 
 static void printBanner()
 {
-    Serial.println();
-    Serial.println(F("   __ _                            _            _            "));
-    Serial.println(F("  / _(_)                          (_)          | |           "));
-    Serial.println(F(" | |_ _ _ __ _ __ ___  _ __   __ _ _ _ __    __| | _____   __"));
-    Serial.println(F(" |  _| | '__| '_ ` _ \\| '_ \\ / _` | | '_ \\  / _` |/ _ \\ \\ / /"));
-    Serial.println(F(" | | | | |  | | | | | | | | | (_| | | | | || (_| |  __/\\ V / "));
-    Serial.println(F(" |_| |_|_|  |_| |_| |_|_| |_|\\__, |_|_| |_(_)__,_|\\___| \\_/  "));
-    Serial.println(F("                              __/ |                          "));
-    Serial.println(F(" firmngin.dev AIoT Platform  |___/                           "));
-    Serial.print(F(" Version: "));
-    Serial.println(FIRMNGIN_VERSION);
-    Serial.println();
+    Console.println();
+    Console.println("   __ _                            _            _            ");
+    Console.println("  / _(_)                          (_)          | |           ");
+    Console.println(" | |_ _ _ __ _ __ ___  _ __   __ _ _ _ __    __| | _____   __");
+    Console.println(" |  _| | '__| '_ ` _ \\| '_ \\ / _` | | '_ \\  / _` |/ _ \\ \\ / /");
+    Console.println(" | | | | |  | | | | | | | | | (_| | | | | || (_| |  __/\\ V / ");
+    Console.println(" |_| |_|_|  |_| |_| |_|_| |_|\\__, |_|_| |_(_)__,_|\\___| \\_/  ");
+    Console.println("                              __/ |                          ");
+    Console.println(" firmngin.dev AIoT Platform  |___/                           ");
+    Console.print(" Version: ");
+    Console.println(FIRMNGIN_VERSION);
+    Console.println();
 }
 
 bool Firmngin::isProvisioned()
@@ -333,7 +377,7 @@ void Firmngin::begin()
             audioPins = true;
     if (audioPins)
     {
-#if defined(ESP32)
+#if defined(ESP_PLATFORM)
         // A registered speaker or microphone needs the device-wide stream:
         // connect and stand by even when this is an input-only device.
         _audioAutoConnect = true;
@@ -349,52 +393,19 @@ void Firmngin::begin()
 #else
     const bool allowFlashIdentity = _identityLoaded || !firmwareIdentityConfigured;
 #endif
-    _identityLoaded = allowFlashIdentity && FirmnginIdentity::load(flashIdentity);
+    _identityLoaded = _runtimeIdentityConfigured ||
+                      (allowFlashIdentity && FirmnginIdentity::load(flashIdentity));
     const char *activeDecryptor = nullptr;
 
     if (_identityLoaded)
     {
-        _runtimeDeviceId = flashIdentity.deviceId;
-        _runtimeDeviceKey = flashIdentity.deviceKey;
-        _deviceId = _runtimeDeviceId.c_str();
-        _deviceKey = _runtimeDeviceKey.c_str();
-        _runtimeClientCert = flashIdentity.clientCert;
-        _runtimePrivateKey = flashIdentity.privateKey;
-        _runtimeCaCert = flashIdentity.caCert;
-        _runtimeServiceCaCert = flashIdentity.serviceCaCert;
-        _runtimeDecryptor = flashIdentity.decryptor;
+        if (!_runtimeIdentityConfigured)
+            _applyIdentity(flashIdentity);
         activeDecryptor = _runtimeDecryptor.c_str();
-        _runtimeUseFingerprint = flashIdentity.tlsMode == "fingerprint" || flashIdentity.tlsMode.length() == 0;
-        _runtimeUseCA = flashIdentity.tlsMode == "ca";
-        if (flashIdentity.fingerprintHex.length() > 0)
-        {
-            _runtimeUseFingerprint = parseFingerprintHex(flashIdentity.fingerprintHex, _runtimeFingerprint);
-        }
-        if (flashIdentity.brokerAddr.length() > 0)
-        {
-            _mqttServer = flashIdentity.brokerAddr;
-        }
-        if (flashIdentity.brokerPort > 0)
-        {
-            _mqttPort = flashIdentity.brokerPort;
-        }
-        if (flashIdentity.apiBaseUrl.length() > 0)
-        {
-            _apiBaseUrl = flashIdentity.apiBaseUrl;
-        }
-        if (flashIdentity.otaBaseUrl.length() > 0)
-        {
-            _otaBaseUrl = flashIdentity.otaBaseUrl;
-        }
-        if (flashIdentity.audioStreamUrl.length() > 0)
-        {
-            _runtimeAudioStreamUrl = flashIdentity.audioStreamUrl;
-        }
-        _runtimeAudioStreamToken = flashIdentity.audioStreamToken;
     }
     else if (!firmwareIdentityConfigured)
     {
-        Serial.println("ERROR: device identity is not configured; connection blocked");
+        Console.println("ERROR: device identity is not configured; connection blocked");
         return;
     }
     else
@@ -406,13 +417,17 @@ void Firmngin::begin()
 
     if (!validateDeviceCredentials(_deviceId, _deviceKey))
     {
-        Serial.println("ERROR: invalid device credentials; connection blocked");
+        Console.println("ERROR: invalid device credentials; connection blocked");
         return;
     }
 
-    if (_identityLoaded)
+    if (_runtimeIdentityConfigured)
     {
-        _Debug("Identity loaded from /ffs");
+        _Debug("Identity loaded from runtime configuration");
+    }
+    else if (_identityLoaded)
+    {
+        _Debug("Identity loaded from /firmnginfs");
     }
     else
     {
@@ -425,6 +440,13 @@ void Firmngin::begin()
 
     _topicUpdateEntity = "/d/" + String(_deviceId) + "/ps";
     _topicUpdateEntities = "/d/" + String(_deviceId) + "/psb";
+    _cloudLogTopic = "/d/" + String(_deviceId) + "/lg";
+    cloudlog.begin(fng_now_ms);
+    cloudlog.onSink(
+        [](const char *line, unsigned long tsMs, void *user) -> bool {
+            return static_cast<Firmngin *>(user)->_cloudLogSink(line, tsMs, user);
+        },
+        this);
 
     if (!_networkReady())
     {
@@ -435,15 +457,15 @@ void Firmngin::begin()
     syncTime();
     printBanner();
 
-#if defined(ESP32)
+#if defined(ESP_PLATFORM)
     if (_mqttNoTls)
     {
-        Serial.println("WARNING: server dev mode — TLS disabled");
+        Console.println("WARNING: server dev mode — TLS disabled");
     }
     else
     {
 #endif
-#if defined(ESP32)
+#if defined(ESP_PLATFORM)
     const char *caCert = _identityLoaded ? _runtimeCaCert.c_str() : _caCert;
     const char *clientCert = _identityLoaded ? _runtimeClientCert.c_str() : _clientCert;
     const char *privateKey = _identityLoaded ? _runtimePrivateKey.c_str() : _privateKey;
@@ -467,7 +489,7 @@ void Firmngin::begin()
     if (!isConfiguredPEM(clientCert, "-----BEGIN CERTIFICATE-----") ||
         !isConfiguredPEM(privateKey, "PRIVATE KEY-----"))
     {
-        Serial.println("ERROR: mTLS credentials not configured");
+        Console.println("ERROR: mTLS credentials not configured");
         return;
     }
 
@@ -477,23 +499,23 @@ void Firmngin::begin()
 
     if (_insecure)
     {
-        Serial.println("Server validation: DISABLED (setInsecure)");
+        Console.println("Server validation: DISABLED (setInsecure)");
     }
     else if (caCert != nullptr)
     {
         if (!isConfiguredPEM(caCert, "-----BEGIN CERTIFICATE-----"))
         {
-            Serial.println("ERROR: CA certificate is malformed or still uses the template placeholder; connection blocked");
+            Console.println("ERROR: CA certificate is malformed or still uses the template placeholder; connection blocked");
             return;
         }
     }
     else
     {
-        Serial.println("ERROR: CA certificate is not configured; connection blocked");
+        Console.println("ERROR: CA certificate is not configured; connection blocked");
         return;
     }
 #endif
-#if defined(ESP32)
+#if defined(ESP_PLATFORM)
     }
 #endif
 
@@ -591,7 +613,7 @@ void Firmngin::setInsecure(bool insecure)
 {
     _insecure = insecure;
     if (insecure)
-        Serial.println("WARNING: TLS certificate verification explicitly disabled");
+        Console.println("WARNING: TLS certificate verification explicitly disabled");
 }
 
 void Firmngin::setTimezone(int timezone)
@@ -613,8 +635,23 @@ void Firmngin::setDaylightOffsetSec(int daylightOffsetSec)
 
 void Firmngin::syncTime()
 {
+#if defined(ARDUINO)
     configTime(GMT_OFFSET_SEC, DAYLIGHT_OFFSET_SEC, NTP_SERVER);
-    _ntpSyncStartMs = millis();
+#elif defined(ESP_PLATFORM)
+    esp_sntp_stop();
+    esp_sntp_setoperatingmode(SNTP_OPMODE_POLL);
+    esp_sntp_setservername(0, NTP_SERVER);
+    esp_sntp_init();
+    // POSIX TZ offsets have the opposite sign to the configured UTC offset.
+    const long offset = -(GMT_OFFSET_SEC + DAYLIGHT_OFFSET_SEC);
+    const long seconds = labs(offset);
+    char timezone[48];
+    snprintf(timezone, sizeof(timezone), "UTC%s%ld:%02ld:%02ld",
+             offset < 0 ? "-" : "+", seconds / 3600, seconds / 60 % 60, seconds % 60);
+    setenv("TZ", timezone, 1);
+    tzset();
+#endif
+    _ntpSyncStartMs = fng_now_ms();
     _ntpSynced = false;
 }
 
@@ -867,24 +904,24 @@ void Firmngin::onEntity(const char *key, EntityCommandCallbackFunction callback)
 // Request path of a stream url.
 static String audioStreamPath(const String &url)
 {
-    const int schemeEnd = url.indexOf("://");
+    const int schemeEnd = fng_indexOf(url, "://");
     if (schemeEnd < 0)
         return "";
-    const int pathStart = url.indexOf('/', schemeEnd + 3);
+    const int pathStart = fng_indexOf(url, '/', schemeEnd + 3);
     if (pathStart < 0)
         return "";
-    return url.substring(pathStart);
+    return fng_substring(url, pathStart);
 }
 
 String Firmngin::_resolveAudioStreamUrl() const
 {
     String base = _runtimeAudioStreamUrl;
-    if (base.length() > 0 && (base.startsWith("ws://") || base.startsWith("wss://")))
+    if (base.length() > 0 && fng_isWsScheme(base))
         return base;
     if (base.length() == 0)
         base = _audioStreamBaseUrl;
 
-    const bool secure = !base.startsWith("http://");
+    const bool secure = !fng_startsWith(base, "http://");
     const char *schemeEnd = strstr(base.c_str(), "://");
     if (schemeEnd == nullptr)
         return "";
@@ -893,12 +930,12 @@ String Firmngin::_resolveAudioStreamUrl() const
     if (!firmngin_audio_stream_id(_deviceId, _deviceKey, streamId, sizeof(streamId)))
         return "";
 
-    String hostAndBase = base.substring(static_cast<unsigned int>(schemeEnd - base.c_str()) + 3);
-    while (hostAndBase.endsWith("/"))
-        hostAndBase.remove(hostAndBase.length() - 1);
+    String hostAndBase = fng_substring(base, static_cast<int>(schemeEnd - base.c_str()) + 3);
+    while (fng_endsWith(hostAndBase, "/"))
+        hostAndBase = fng_substring(hostAndBase, 0, static_cast<int>(hostAndBase.length()) - 1);
     if (hostAndBase.length() == 0)
         return "";
-    return String(secure ? "wss://" : "ws://") + hostAndBase + "/v1/e/" + streamId;
+    return fng_streamScheme(secure) + hostAndBase + "/v1/e/" + streamId;
 }
 
 bool Firmngin::openAudioStream(AudioChunkCallbackFunction onChunk, AudioStreamEventCallbackFunction onEvent)
@@ -909,7 +946,7 @@ bool Firmngin::openAudioStream(AudioChunkCallbackFunction onChunk, AudioStreamEv
 void Firmngin::enableAudioStream(AudioStreamEventCallbackFunction onEvent)
 {
     _audioEventCallback = onEvent;
-#if defined(ESP32)
+#if defined(ESP_PLATFORM)
     _audioAutoConnect = true;
     _audioAutoConnectAtMs = 0;
     _tryAutoConnectAudio();
@@ -951,7 +988,7 @@ FirmnginI2s &Firmngin::setAudioInput(const char *key, FirmnginI2sChip chip)
         for (auto &source : _microphones)
             if (source.key == key)
                 return source.i2s.setChip(chip);
-#if defined(ESP32)
+#if defined(ESP_PLATFORM)
         // _activeMicrophone points into this vector while the capture task runs.
         // Refuse a new binding until it finishes so vector growth cannot invalidate
         // that pointer underneath the task.
@@ -962,7 +999,7 @@ FirmnginI2s &Firmngin::setAudioInput(const char *key, FirmnginI2sChip chip)
         }
 #endif
         _microphones.push_back(MicrophoneSource{String(key), FirmnginI2s(chip)});
-#if defined(ESP32)
+#if defined(ESP_PLATFORM)
         _audioAutoConnect = true;
         _audioAutoConnectAtMs = 0;
 #endif
@@ -979,7 +1016,7 @@ bool Firmngin::startAudioInput(const Entity &entity)
 
 bool Firmngin::startAudioInput(const char *key)
 {
-#if !defined(ESP32)
+#if !defined(ESP_PLATFORM)
     (void)key;
     _notifyAudioEvent(AUDIO_INPUT_ERROR, "audio input requires ESP32");
     return false;
@@ -1051,21 +1088,21 @@ bool Firmngin::startAudioInput(const char *key)
 
 void Firmngin::stopAudioInput()
 {
-#if defined(ESP32)
+#if defined(ESP_PLATFORM)
     _audioInputStopRequested = true;
 #endif
 }
 
 bool Firmngin::isAudioInputRecording() const
 {
-#if defined(ESP32)
+#if defined(ESP_PLATFORM)
     return _audioInputRecording;
 #else
     return false;
 #endif
 }
 
-#if defined(ESP32)
+#if defined(ESP_PLATFORM)
 bool Firmngin::_sendAudioInputControl(const char *type, const char *entityKey, const char *captureId)
 {
     const esp_websocket_client_handle_t ws = _audioWs;
@@ -1125,10 +1162,10 @@ void Firmngin::_runAudioInput()
 {
     uint8_t raw[AUDIO_SAMPLES_PER_FRAME * 2 * sizeof(int32_t)];
     uint8_t pcm[AUDIO_FRAME_BYTES];
-    const unsigned long startedAt = millis();
+    const unsigned long startedAt = fng_now_ms();
     bool cancelled = false;
 
-    while (!_audioInputStopRequested && millis() - startedAt < FIRMNGIN_AUDIO_INPUT_MAX_MS)
+    while (!_audioInputStopRequested && fng_now_ms() - startedAt < FIRMNGIN_AUDIO_INPUT_MAX_MS)
     {
         MicrophoneSource *source = _activeMicrophone;
         if (source == nullptr || source->i2s.read(raw, sizeof(raw)) != sizeof(raw))
@@ -1203,20 +1240,20 @@ void Firmngin::_applyAudioStreamUrl(const String &url)
     if (url.length() == 0 || url == _runtimeAudioStreamUrl)
         return;
     _runtimeAudioStreamUrl = url;
-#if defined(ESP32)
+#if defined(ESP_PLATFORM)
     if (!_audioKeepAlive)
         return;
     // The endpoint moved under a live stream: re-sign against the new URL on the next
     // loop pass instead of waiting for the socket to drop.
     _audioUrl = url;
     _audioReconnectPending = true;
-    _audioReconnectAtMs = millis();
+    _audioReconnectAtMs = fng_now_ms();
 #endif
 }
 
 void Firmngin::_tryAutoConnectAudio()
 {
-#if defined(ESP32)
+#if defined(ESP_PLATFORM)
     if (!_audioAutoConnect || _audioKeepAlive || !_hasAudioInterfaceConfigured())
         return;
     // Signing needs a real clock; NTP sync started by begin() flips this.
@@ -1226,7 +1263,7 @@ void Firmngin::_tryAutoConnectAudio()
     // wait for that frame rather than guessing the legacy derived path.
     if (_runtimeAudioStreamUrl.length() == 0 && !_deviceInitReceived)
         return;
-    if (static_cast<long>(millis() - _audioAutoConnectAtMs) < 0)
+    if (static_cast<long>(fng_now_ms() - _audioAutoConnectAtMs) < 0)
         return;
     // openAudioStream() closes first, which clears the arm. Re-arm on failure so a
     // bad endpoint retries on a timer instead of once per loop(); on success the
@@ -1234,7 +1271,7 @@ void Firmngin::_tryAutoConnectAudio()
     if (!openAudioStream(FirmnginAudioConfig(), nullptr, _audioEventCallback))
     {
         _audioAutoConnect = true;
-        _audioAutoConnectAtMs = millis() + 5000;
+        _audioAutoConnectAtMs = fng_now_ms() + 5000;
     }
 #endif
 }
@@ -1243,7 +1280,7 @@ Firmngin &Firmngin::bindAudioEntity(const char *key, AudioStreamEventCallbackFun
 {
     if (key != nullptr && key[0] != '\0')
         _audioEntityCallbacks[String(key)] = handler;
-#if defined(ESP32)
+#if defined(ESP_PLATFORM)
     if (!_audioKeepAlive)
     {
         _audioAutoConnect = true;
@@ -1281,7 +1318,7 @@ bool Firmngin::openAudioStream(const char *url, const char *token, AudioChunkCal
     return openAudioStream(config, onChunk, onEvent);
 }
 
-#if defined(ESP32)
+#if defined(ESP_PLATFORM)
 void Firmngin::_releaseAudioQueues()
 {
     if (_audioRx != nullptr)
@@ -1333,9 +1370,9 @@ void Firmngin::_stopAudioWs()
     _audioWs = nullptr;
     _audioInputCancelRequested = true;
     _audioInputStopRequested = true;
-    const unsigned long inputStopDeadline = millis() + 1250;
-    while (_audioInputTaskHandle != nullptr && static_cast<long>(millis() - inputStopDeadline) < 0)
-        delay(1);
+    const unsigned long inputStopDeadline = fng_now_ms() + 1250;
+    while (_audioInputTaskHandle != nullptr && static_cast<long>(fng_now_ms() - inputStopDeadline) < 0)
+        fng_delay_ms(1);
     if (ws != nullptr)
     {
         esp_websocket_client_stop(ws);
@@ -1347,10 +1384,10 @@ bool Firmngin::_waitForAudioClock()
 {
     if (static_cast<unsigned long>(time(nullptr)) >= AUDIO_MIN_VALID_EPOCH)
         return true;
-    const unsigned long waitStart = millis();
+    const unsigned long waitStart = fng_now_ms();
     while (static_cast<unsigned long>(time(nullptr)) < AUDIO_MIN_VALID_EPOCH &&
-           millis() - waitStart < FIRMNGIN_NTP_SYNC_TIMEOUT_MS)
-        delay(50);
+           fng_now_ms() - waitStart < FIRMNGIN_NTP_SYNC_TIMEOUT_MS)
+        fng_delay_ms(50);
     return static_cast<unsigned long>(time(nullptr)) >= AUDIO_MIN_VALID_EPOCH;
 }
 
@@ -1381,7 +1418,7 @@ bool Firmngin::_buildAudioWsHeaders()
     }
     _audioHeaders += String("X-Device-ID: ") + _deviceId + "\r\n";
     _audioHeaders += String("X-Device-Timestamp: ") + String(now) + "\r\n";
-    _audioHeaders += String("X-Device-Signature: ") + hmacSHA256(_deviceKey, message) + "\r\n";
+    _audioHeaders += String("X-Device-Signature: ") + firmngin_hmac_sha256_hex(_deviceKey, message) + "\r\n";
     return true;
 }
 
@@ -1390,7 +1427,7 @@ bool Firmngin::_startAudioWsClient()
     if (!_buildAudioWsHeaders())
         return false;
 
-    const bool isSecure = _audioUrl.startsWith("wss://");
+    const bool isSecure = fng_isSecureWsScheme(_audioUrl);
     const char *activeServiceCA = _activeServiceCACert();
     if (isSecure && !_insecure && activeServiceCA == nullptr)
     {
@@ -1453,15 +1490,15 @@ bool Firmngin::openAudioStream(const FirmnginAudioConfig &config, AudioChunkCall
 
     // These checks answer before the socket exists, so they are reported straight
     // back: the caller is in setup()/loop(), never the socket task.
-    const bool isSecure = resolvedURL.startsWith("wss://");
+    const bool isSecure = fng_isSecureWsScheme(resolvedURL);
     if (resolvedURL.length() == 0)
     {
         _notifyAudioEvent(AUDIO_ERROR, "audio stream url is not configured");
         return false;
     }
-    if (!isSecure && !resolvedURL.startsWith("ws://"))
+    if (!isSecure && !fng_isPlainWsScheme(resolvedURL))
     {
-        _notifyAudioEvent(AUDIO_ERROR, "audio stream url must use ws:// or wss://");
+        _notifyAudioEvent(AUDIO_ERROR, "audio stream url must use a websocket scheme");
         return false;
     }
     // Late hardware registration: begin() already ran, so start configured I2S now.
@@ -1492,7 +1529,7 @@ bool Firmngin::openAudioStream(const FirmnginAudioConfig &config, AudioChunkCall
         _notifyAudioEvent(AUDIO_ERROR, "audio stream config is invalid");
         return false;
     }
-#if !defined(ESP32)
+#if !defined(ESP_PLATFORM)
     _audioChunkCallback = nullptr;
     _audioEventCallback = nullptr;
     _notifyAudioEvent(AUDIO_ERROR, "audio streaming requires ESP32");
@@ -1530,7 +1567,7 @@ bool Firmngin::openAudioStream(const FirmnginAudioConfig &config, AudioChunkCall
 
 void Firmngin::closeAudioStream()
 {
-#if defined(ESP32)
+#if defined(ESP_PLATFORM)
     stopAudioInput();
     _audioKeepAlive = false;
     _audioReconnectPending = false;
@@ -1550,7 +1587,7 @@ void Firmngin::closeAudioStream()
 
 bool Firmngin::isAudioStreamConnected() const
 {
-#if defined(ESP32)
+#if defined(ESP_PLATFORM)
     return _audioWs != nullptr && esp_websocket_client_is_connected(_audioWs);
 #else
     return false;
@@ -1604,7 +1641,7 @@ static String findInitAudioStreamUrl(const String &entitiesJson)
             // actual ws(s) URL here.
             char url[FIRMNGIN_AUDIO_STREAM_URL_MAX];
             if (entry.getString("v", url, sizeof(url)) > 0 &&
-                (strncmp(url, "wss://", 6) == 0 || strncmp(url, "ws://", 5) == 0))
+                fng_isWsSchemeC(url))
                 return String(url);
         }
         p = objEnd + 1;
@@ -1632,7 +1669,7 @@ Inits::Inits(const String &jsonPayload)
     const char *raw = p.getRaw("e", rawLen);
     if (raw != nullptr && rawLen > 0)
     {
-        _entitiesJson = String(raw).substring(0, rawLen);
+        _entitiesJson = fng_substring(String(raw), 0, static_cast<int>(rawLen));
         _audioStreamUrl = findInitAudioStreamUrl(_entitiesJson);
     }
     if (p.getString("m", buf, sizeof(buf)) > 0)
@@ -1714,6 +1751,7 @@ void Firmngin::setupLWT()
 
 void Firmngin::loop()
 {
+    _gatewayTick();
 #if defined(FIRMNGIN_FACTORY_SERIAL) && (FIRMNGIN_FACTORY_SERIAL != 0)
     if (!_securityReady)
     {
@@ -1744,11 +1782,11 @@ void Firmngin::loop()
     {
         if (!_mqttIsStarted())
         {
-            unsigned long now = millis();
+            unsigned long now = fng_now_ms();
             if (now - lastReconnectAttempt > backoffDelay)
             {
                 lastReconnectAttempt = now;
-                backoffDelay = min(backoffDelay * 2, 15000UL);
+                backoffDelay = std::min(backoffDelay * 2, 15000UL);
                 if (connectServer())
                     backoffDelay = 2000UL;
             }
@@ -1762,17 +1800,35 @@ void Firmngin::loop()
     _processAudio();
     _processOTA();
     runActiveSessionHandlers();
+    _cloudLogDrain();
 }
 
 void Firmngin::_otaRollbackSetup()
 {
-    _otaBootStartMs = millis();
-#if defined(ESP32)
-    _otaPrefs.begin("fngin_ota", false);
-    _otaRollbackReady = true;
+    _otaBootStartMs = fng_now_ms();
+#if defined(ESP_PLATFORM)
+    _otaRollbackReady = _otaPrefs.begin("fngin_ota", false);
+    if (!_otaRollbackReady)
+    {
+        _Debug("OTA rollback: failed to open persistent state");
+        return;
+    }
     _otaLastOkVersion = _otaPrefs.getString("last_ok", "");
     _otaRollbackPending = _otaPrefs.getBool("pending", false);
     _otaRollbackBootCount = _otaPrefs.getUChar("boot_cnt", 0);
+    _otaPendingPartition = _otaPrefs.getUInt("target_part", 0);
+    _otaBootFirmwareID = _otaPrefs.getString("firmware_id", "");
+    // A report survives reset until the QoS 1 outbox has drained. Never load a
+    // completion while the candidate is still pending confirmation.
+    _otaBootReportStatus = _otaPrefs.getString("boot_report", "");
+    _otaBootReportMessage = _otaPrefs.getString("boot_message", "");
+    if (_otaRollbackPending && _otaBootReportStatus == "completed")
+    {
+        _otaBootReportStatus = "";
+        _otaBootReportMessage = "";
+    }
+    if (!_otaRollbackPending && _otaLastOkVersion.length() == 0 && _firmwareVersion.length() > 0)
+        _otaLastOkVersion = _firmwareVersion;
 #endif
 
     OtaRollbackState st;
@@ -1780,14 +1836,12 @@ void Firmngin::_otaRollbackSetup()
     st.pending = _otaRollbackPending;
     st.bootCount = _otaRollbackBootCount;
 
-    OtaRollbackResult res = firmngin_ota_rollback_decide(_firmwareVersion.c_str(), st, 0);
+    OtaRollbackResult res = firmngin_ota_rollback_decide(_firmwareVersion.c_str(), st, 0, _otaRunningCandidatePartition());
     _otaRollbackBootCount = res.nextBootCount;
     if (res.clearPending)
         _otaRollbackPending = false;
     if (res.setLastOk)
         _otaLastOkVersion = _firmwareVersion;
-    _persistOtaRollbackState();
-
     switch (res.action)
     {
     case OTA_RB_REPORT_ROLLED_BACK:
@@ -1801,59 +1855,157 @@ void Firmngin::_otaRollbackSetup()
     default:
         break;
     }
+    // Save a terminal report before clearing pending so a reset cannot lose it.
+    if (_otaBootReportStatus.length() > 0 && !_persistOtaBootReport())
+        _Debug("OTA rollback: failed to persist boot report");
+    if (!_persistOtaRollbackState())
+        _Debug("OTA rollback: failed to persist boot state");
+}
+
+int Firmngin::_otaRunningCandidatePartition() const
+{
+#if defined(ESP_PLATFORM)
+    if (_otaPendingPartition != 0)
+    {
+        const esp_partition_t *running = esp_ota_get_running_partition();
+        if (running != nullptr)
+            return running->address == _otaPendingPartition ? 1 : 0;
+    }
+#endif
+    return -1;
+}
+
+bool Firmngin::_persistOtaBootReport()
+{
+#if defined(ESP_PLATFORM)
+    if (!_otaRollbackReady || _otaBootReportStatus.length() == 0)
+        return false;
+    // Write the status last; it is the commit marker for a complete report.
+    if (_otaPrefs.putString("boot_message", _otaBootReportMessage) == 0)
+        return false;
+    return _otaPrefs.putString("boot_report", _otaBootReportStatus) > 0;
+#else
+    return true;
+#endif
+}
+
+bool Firmngin::_clearOtaBootReport()
+{
+#if defined(ESP_PLATFORM)
+    if (!_otaRollbackReady || !firmngin_clear_ota_boot_report(_otaPrefs))
+        return false;
+#endif
+    _otaBootReportStatus = "";
+    _otaBootReportMessage = "";
+    _otaRollbackReportPublished = false;
+    _otaBootReportRetryMs = 0;
+    return true;
 }
 
 void Firmngin::_otaRollbackLoop()
 {
-#if defined(ESP32)
+#if defined(ESP_PLATFORM)
     if (!_otaRollbackReady)
         return;
 
-    // Send the deferred boot report (rollback / boot failure) once the network is up.
-    if (_otaBootReportStatus.length() > 0 && !_otaRollbackReportPublished &&
-        _mqttIsConnected())
+    if (!_mqttIsConnected())
+        _otaRollbackReportPublished = false;
+
+    // Keep the report durable until MQTT QoS 1 delivery has drained the outbox.
+    // A reset or reconnect before that point sends it again; the BE is idempotent.
+    if (_otaBootReportStatus.length() > 0 && _mqttIsConnected())
     {
-        publishOTAStatus(_otaBootReportStatus.c_str(), _otaBootReportMessage.c_str());
-        _otaRollbackReportPublished = true;
+        if (!_otaRollbackReportPublished &&
+            (_otaBootReportRetryMs == 0 || fng_now_ms() - _otaBootReportRetryMs >= 5000UL))
+        {
+            _otaBootReportRetryMs = fng_now_ms();
+            const String activeFirmwareID = _otaFirmwareID;
+            _otaFirmwareID = _otaBootFirmwareID;
+            _otaRollbackReportPublished = publishOTAStatus(_otaBootReportStatus.c_str(), _otaBootReportMessage.c_str());
+            _otaFirmwareID = activeFirmwareID;
+        }
+        else if (_otaRollbackReportPublished && _mqtt != nullptr &&
+                 esp_mqtt_client_get_outbox_size(_mqtt) == 0)
+        {
+            _clearOtaBootReport();
+        }
     }
 
     // Mark the running firmware valid once it has been stable for the grace period.
-    if (_otaRollbackPending && !_otaRollbackMarkedThisBoot &&
-        millis() - _otaBootStartMs >= OTA_ROLLBACK_BOOT_OK_MS)
+    if (_otaRollbackPending && !_otaRollbackMarkAttemptedThisBoot &&
+        fng_now_ms() - _otaBootStartMs >= OTA_ROLLBACK_BOOT_OK_MS)
     {
         OtaRollbackState st;
         st.lastOkVersion = _otaLastOkVersion.c_str();
         st.pending = _otaRollbackPending;
         st.bootCount = _otaRollbackBootCount;
 
-        OtaRollbackResult res = firmngin_ota_rollback_decide(_firmwareVersion.c_str(), st, millis() - _otaBootStartMs);
+        OtaRollbackResult res = firmngin_ota_rollback_decide(_firmwareVersion.c_str(), st, fng_now_ms() - _otaBootStartMs, _otaRunningCandidatePartition());
         if (res.action == OTA_RB_MARK_VALID)
         {
-#if defined(ESP32)
-            esp_ota_mark_app_valid_cancel_rollback();
+            _otaRollbackMarkAttemptedThisBoot = true;
+#if defined(ESP_PLATFORM)
+            if (esp_ota_mark_app_valid_cancel_rollback() != ESP_OK)
+            {
+                _otaBootReportStatus = "failed";
+                _otaBootReportMessage = "Firmware boot confirmation failed";
+                _otaRollbackReportPublished = false;
+                _otaBootReportRetryMs = 0;
+                _persistOtaBootReport();
+                _Debug("OTA rollback: failed to mark running firmware valid");
+                return;
+            }
 #endif
+            _otaBootReportStatus = "completed";
+            _otaBootReportMessage = "Firmware boot confirmed";
+            _otaRollbackReportPublished = false;
+            _otaBootReportRetryMs = 0;
+            if (!_persistOtaBootReport())
+            {
+                _otaBootReportStatus = "failed";
+                _otaBootReportMessage = "Boot confirmation report could not be saved";
+                _persistOtaBootReport();
+                _Debug("OTA rollback: failed to persist boot confirmation report");
+                return;
+            }
             _otaRollbackPending = false;
             _otaLastOkVersion = _firmwareVersion;
             _otaRollbackBootCount = 0;
-            _persistOtaRollbackState();
-            _otaRollbackMarkedThisBoot = true;
+            if (!_persistOtaRollbackState())
+            {
+                _otaBootReportStatus = "failed";
+                _otaBootReportMessage = "Rollback state could not be saved";
+                _persistOtaBootReport();
+                _Debug("OTA rollback: failed to persist confirmed firmware state");
+                return;
+            }
             _Debug("OTA rollback: running firmware marked valid");
         }
     }
 #endif
 }
 
-void Firmngin::_persistOtaRollbackState()
+bool Firmngin::_persistOtaRollbackState()
 {
-#if defined(ESP32)
+#if defined(ESP_PLATFORM)
     if (!_otaRollbackReady)
     {
-        _otaPrefs.begin("fngin_ota", false);
-        _otaRollbackReady = true;
+        _otaRollbackReady = _otaPrefs.begin("fngin_ota", false);
+        if (!_otaRollbackReady)
+            return false;
     }
-    _otaPrefs.putString("last_ok", _otaLastOkVersion);
-    _otaPrefs.putBool("pending", _otaRollbackPending);
-    _otaPrefs.putUChar("boot_cnt", (uint8_t)_otaRollbackBootCount);
+    const size_t versionBytes = _otaPrefs.putString("last_ok", _otaLastOkVersion);
+    const size_t bootCountBytes = _otaPrefs.putUChar("boot_cnt", (uint8_t)_otaRollbackBootCount);
+    if (versionBytes == 0 || bootCountBytes == 0)
+        return false;
+    if (_otaRollbackPending &&
+        (_otaPrefs.putUInt("target_part", _otaPendingPartition) == 0 ||
+         (_otaBootFirmwareID.length() > 0 && _otaPrefs.putString("firmware_id", _otaBootFirmwareID) == 0)))
+        return false;
+    // Commit pending only after its partition and artifact identity are durable.
+    return _otaPrefs.putBool("pending", _otaRollbackPending) > 0;
+#else
+    return true;
 #endif
 }
 
@@ -1862,15 +2014,96 @@ void Firmngin::_Debug(String message, bool newLine)
     if (_debug)
     {
         if (newLine)
-            Serial.println(message);
+            Console.println(message);
         else
-            Serial.print(message);
+            Console.print(message);
     }
+}
+
+void Firmngin::printf(const char *fmt, ...)
+{
+    va_list args;
+    va_start(args, fmt);
+    char buf[FNG_CLOUDLOG_LINE_MAX];
+    const int n = vsnprintf(buf, sizeof(buf), fmt, args);
+    va_end(args);
+    if (n <= 0)
+        return;
+    // n is the untruncated length; clamp to what actually fit in buf.
+    size_t len = n < (int)sizeof(buf) ? static_cast<size_t>(n) : sizeof(buf) - 1;
+    // printf lines end with Serial's newline; a trailing \n must close the
+    // CloudLog line, otherwise the ring never receives a completed line and
+    // loop() has nothing to publish.
+    bool endsNewline = len > 0 && buf[len - 1] == '\n';
+    if (endsNewline)
+        --len;
+    if (len > 0 && buf[len - 1] == '\r')
+        --len;
+    buf[len] = '\0';
+    cloudlog.print(buf);
+    if (endsNewline)
+        cloudlog.println();
+}
+
+// Sink the CloudLog ring drains into. Rate limits the publish to once per
+// second and refuses (order-preserving retry next drain) while the platform
+// MQTT session is still handshaking. Lines go out E2EE-when-enabled, plaintext
+// otherwise, same as every other publish; the offline persistent queue is
+// deliberately bypassed — a dropped shell log is not a lost transaction.
+bool Firmngin::_cloudLogSink(const char *line, unsigned long tsMs, void *user)
+{
+#if defined(ESP_PLATFORM)
+    (void)user;
+    if (!_mqttUp || !_mqtt || _mqttHelloPending)
+        return false;
+    unsigned long now = fng_now_ms();
+    if (now - _cloudLogLastAttemptMs < 1000UL)
+        return false;
+
+    // One line per publish: {"t":<boot ms>,"l":"<json-escaped line>"} on
+    // /d/{deviceId}/lg. ts is boot-relative (fng_now_ms) — the dashboard
+    // correlates it with session start instead of trusting device clocks.
+    char tsBuf[24];
+    snprintf(tsBuf, sizeof(tsBuf), "%lu", static_cast<unsigned long>(tsMs));
+
+    char buf[FNG_CLOUDLOG_LINE_MAX * 2 + 64];
+    firmngin_json::Builder b(buf, sizeof(buf));
+    b.reset();
+    if (!b.addRaw("t", tsBuf))
+        return false;
+    char escaped[FNG_CLOUDLOG_LINE_MAX * 2];
+    firmngin_json::_jsonEscape(line, escaped, sizeof(escaped));
+    char quoted[FNG_CLOUDLOG_LINE_MAX * 2 + 2];
+    const size_t escLen = strlen(escaped);
+    quoted[0] = '"';
+    memcpy(quoted + 1, escaped, escLen);
+    quoted[escLen + 1] = '"';
+    quoted[escLen + 2] = '\0';
+    if (!b.addRaw("l", quoted))
+        return false;
+    if (!publishPayload(_cloudLogTopic.c_str(), b.build()))
+        return false;
+    _cloudLogLastAttemptMs = now;
+    return true;
+#else
+    (void)line; (void)tsMs; (void)user; return false;
+#endif
+}
+
+void Firmngin::_cloudLogDrain()
+{
+    _cloudLogSent = cloudlog.drain();
 }
 
 void Firmngin::setDebug(bool debug)
 {
     _debug = debug;
+}
+
+void Firmngin::linkUp(bool up)
+{
+    _linkForced = true;
+    _linkForcedState = up;
 }
 
 bool Firmngin::isPlatformSupported()
@@ -1881,7 +2114,7 @@ bool Firmngin::isPlatformSupported()
 
 static void fillE2EENonce(uint8_t *iv, size_t len)
 {
-#if defined(ESP32)
+#if defined(ESP_PLATFORM)
     esp_fill_random(iv, len);
 #else
     for (size_t i = 0; i < len; i++)
@@ -1900,7 +2133,7 @@ static bool encryptE2EE(const uint8_t *plaintext, size_t plainLen, const uint8_t
     uint8_t *tag = packet + 12 + plainLen;
     fillE2EENonce(iv, 12);
 
-#if defined(ESP32)
+#if defined(ESP_PLATFORM)
     if (keyLen != 16 && keyLen != 32)
         return false;
 
@@ -1948,7 +2181,7 @@ static bool decryptE2EE(const uint8_t *packet, size_t packetLen, const uint8_t *
     const uint8_t *ciphertext = packet + 12;
     const uint8_t *tag = packet + 12 + cipherLen;
 
-#if defined(ESP32)
+#if defined(ESP_PLATFORM)
     if (keyLen == 16)
     {
         // AES-128-GCM
@@ -2004,7 +2237,7 @@ static bool decryptE2EE(const uint8_t *packet, size_t packetLen, const uint8_t *
 #endif
 }
 
-void Firmngin::mqttCallback(char *path, byte *payload, unsigned int length)
+void Firmngin::mqttCallback(char *path, uint8_t *payload, unsigned int length)
 {
     String payloadStr;
 
@@ -2020,7 +2253,9 @@ void Firmngin::mqttCallback(char *path, byte *payload, unsigned int length)
     {
         // Match the server transport bound without putting a large QR buffer on
         // the callback stack. decryptE2EE also receives the actual capacity.
-        if (length < 28 || length > 4096)
+        const String gatewayRoutes = String("/d/") + _deviceId + "/gw/routes";
+        const unsigned int limit = _gatewayEnabled && strcmp(path, gatewayRoutes.c_str()) == 0 ? 65536U : 4096U;
+        if (length < 28 || length > limit)
             return;
         const size_t plainCapacity = length - 28;
         std::unique_ptr<uint8_t[]> plainBuf(new (std::nothrow) uint8_t[plainCapacity ? plainCapacity : 1]);
@@ -2038,17 +2273,18 @@ void Firmngin::mqttCallback(char *path, byte *payload, unsigned int length)
         }
         else
         {
-            Serial.println("E2EE: decryption failed — verify DECRYPTOR key in keys.h matches the server key");
+            Console.println("E2EE: decryption failed — verify DECRYPTOR key in keys.h matches the server key");
             return;
         }
     }
     String pathStr = String(path);
+    if (_gatewayHandle(pathStr, payloadStr)) return;
     String stateType = "";
 
-    int lastSlash = pathStr.lastIndexOf('/');
+    int lastSlash = fng_lastIndexOf(pathStr, '/');
     if (lastSlash >= 0)
     {
-        stateType = pathStr.substring(lastSlash + 1);
+        stateType = fng_substring(pathStr, lastSlash + 1);
     }
 
     DeviceState state(stateType, payloadStr);
@@ -2249,9 +2485,9 @@ void Firmngin::mqttCallback(char *path, byte *payload, unsigned int length)
         _mqttPublish(pongPath.c_str(), reinterpret_cast<const uint8_t *>(payloadStr.c_str()), payloadStr.length(), false);
     }
 
-    if (pathStr.indexOf("/ot/trg") >= 0)
+    if (fng_indexOf(pathStr, "/ot/trg") >= 0)
     {
-        if (_otaAsyncState != OTA_ASYNC_IDLE)
+        if (!firmngin_ota_can_start(_otaAsyncState))
         {
             _Debug("OTA trigger ignored, download already in progress");
             return;
@@ -2291,10 +2527,10 @@ void Firmngin::mqttCallback(char *path, byte *payload, unsigned int length)
         performOTA();
     }
 
-    if (pathStr.indexOf("/rs/") >= 0)
+    if (fng_indexOf(pathStr, "/rs/") >= 0)
     {
-        int rsIndex = pathStr.indexOf("/rs/");
-        String entityKey = pathStr.substring(rsIndex + 4); // after "/rs/"
+        int rsIndex = fng_indexOf(pathStr, "/rs/");
+        String entityKey = fng_substring(pathStr, rsIndex + 4); // after "/rs/"
         EntityCommand cmd(entityKey, payloadStr);
         if (_entityCallbacks.count(entityKey) > 0 || _localEntityValues.count(entityKey) > 0)
         {
@@ -2319,6 +2555,35 @@ void Firmngin::mqttCallback(char *path, byte *payload, unsigned int length)
             _entityCallback(cmd);
         }
     }
+}
+
+bool Firmngin::_gatewayPublish(const char *suffix, const String &payload)
+{
+#if defined(ESP_PLATFORM)
+    if (!_gatewayEnabled || !_mqttUp || !_mqtt || _mqttHelloPending || !suffix || payload.length() == 0 || payload.length() + 28 > FIRMNGIN_E2EE_BUFFER_SIZE) return false;
+    String path = String("/d/") + _deviceId + "/gw/" + suffix;
+    String wire = payload;
+    if (strcmp(suffix, "routes/request") == 0) {
+        time_t now = time(nullptr);
+        if (now < 1700000000) return false;
+        struct tm stamp = {};
+        gmtime_r(&now, &stamp);
+        char observed[32];
+        strftime(observed, sizeof(observed), "%Y-%m-%dT%H:%M:%SZ", &stamp);
+        char request[192];
+        snprintf(request, sizeof(request), "{\"v\":1,\"message_id\":\"%08lx-%08lx-%08lx\",\"observed_at\":\"%s\"}", static_cast<unsigned long>(esp_random()), static_cast<unsigned long>(esp_random()), static_cast<unsigned long>(++_gatewaySequence), observed);
+        wire = request;
+    }
+    if (wire.length() + 28 > FIRMNGIN_E2EE_BUFFER_SIZE) return false;
+    if (!_e2eeEnabled || _e2eeKeyLen == 0) return false;
+    uint8_t encrypted[FIRMNGIN_E2EE_BUFFER_SIZE];
+    size_t length = 0;
+    if (!encryptE2EE(reinterpret_cast<const uint8_t *>(wire.c_str()), wire.length(), _e2eeKeyBytes, _e2eeKeyLen, encrypted, &length)) return false;
+    // QoS 0, non-retained, direct send: bypass persistent queue and MQTT outbox.
+    return esp_mqtt_client_publish(_mqtt, path.c_str(), reinterpret_cast<const char *>(encrypted), static_cast<int>(length), 0, 0) >= 0;
+#else
+    (void)suffix; (void)payload; return false;
+#endif
 }
 
 bool Firmngin::publishPayload(const char *path, const char *payload, bool retained)
@@ -2516,7 +2781,7 @@ bool Firmngin::endSession()
     if (_currentOrderId.length() == 0 || _merchantStatus != "on_active_service")
         return false;
 
-    unsigned long now = millis();
+    unsigned long now = fng_now_ms();
     if (_sessionEndRequested || (now - _lastSessionEndAtMs < 3000))
         return false;
     _lastSessionEndAtMs = now;
@@ -2673,7 +2938,7 @@ bool Firmngin::syncFirmwareInfo()
     {
         if (_debug)
         {
-            Serial.println(F("[firmngin] syncFirmwareInfo: skipped, not connected"));
+            Console.println("[firmngin] syncFirmwareInfo: skipped, not connected");
         }
         return false;
     }
@@ -2682,7 +2947,7 @@ bool Firmngin::syncFirmwareInfo()
     {
         if (_debug)
         {
-            Serial.println(F("[firmngin] syncFirmwareInfo: skipped, same version"));
+            Console.println("[firmngin] syncFirmwareInfo: skipped, same version");
         }
         return true;
     }
@@ -2698,645 +2963,25 @@ bool Firmngin::syncFirmwareInfo()
 
     if (_debug && ok)
     {
-        Serial.print(F("Syncing Firmware Info: V"));
-        Serial.print(_firmwareVersion);
-        Serial.print(F(", Target Board: "));
-        Serial.print(_firmwareTargetBoard);
-        Serial.print(F(", Model: "));
-        Serial.println(_firmwareTargetModel);
+        Console.print("Syncing Firmware Info: V");
+        Console.print(_firmwareVersion);
+        Console.print(", Target Board: ");
+        Console.print(_firmwareTargetBoard);
+        Console.print(", Model: ");
+        Console.println(_firmwareTargetModel);
     }
 
     return ok;
 }
 
-#if defined(ESP32)
+#if defined(ESP_PLATFORM)
 
-static String hmacSHA256(const char *key, const char *message)
-{
-    uint8_t hmacResult[32];
-    mbedtls_md_context_t ctx;
-    mbedtls_md_init(&ctx);
-    mbedtls_md_setup(&ctx, mbedtls_md_info_from_type(MBEDTLS_MD_SHA256), 1);
-    mbedtls_md_hmac_starts(&ctx, (const unsigned char *)key, strlen(key));
-    mbedtls_md_hmac_update(&ctx, (const unsigned char *)message, strlen(message));
-    mbedtls_md_hmac_finish(&ctx, hmacResult);
-    mbedtls_md_free(&ctx);
-
-    char hex[65];
-    for (int i = 0; i < 32; i++)
-        sprintf(hex + (i * 2), "%02x", hmacResult[i]);
-    hex[64] = '\0';
-    return String(hex);
-}
 
 #endif
 
-#if 0
-// OTA implementation moved to ota.cpp.
-void Firmngin::setOTABaseURL(const char *baseURL)
-{
-    _otaBaseUrl = baseURL != nullptr ? baseURL : "";
-}
-
-void Firmngin::setEnableOTA(bool enabled)
-{
-    _otaEnabled = enabled;
-}
-
-void Firmngin::enableOTA(bool enabled)
-{
-    setEnableOTA(enabled);
-}
-
-bool Firmngin::otaHTTPGet(const char *path, const char *queryParams, String &responseBody)
-{
-    String fullPath = String(path);
-    if (queryParams != nullptr && strlen(queryParams) > 0)
-    {
-        fullPath += "?";
-        fullPath += queryParams;
-    }
-
-    String url = _otaBaseUrl + fullPath;
-
-    unsigned long ts = time(nullptr);
-    String message = String(_deviceId) + "." + String(ts) + ".GET." + fullPath;
-    const char *activeServiceCA = _activeServiceCACert();
-
-#if defined(ESP32)
-    HTTPClient http;
-#if defined(ESP32)
-    WiFiClientSecure otaClient;
-    if (_insecure)
-    {
-        otaClient.setInsecure();
-    }
-    else
-    {
-        if (activeServiceCA == nullptr)
-        {
-            publishOTAStatus("failed", "Service CA certificate is not configured");
-            return false;
-        }
-        otaClient.setCACert(activeServiceCA);
-    }
-    if (_clientCert != nullptr)
-        otaClient.setCertificate(_clientCert);
-    if (_privateKey != nullptr)
-        otaClient.setPrivateKey(_privateKey);
-#endif
-    if (!http.begin(otaClient, url))
-    {
-        publishOTAStatus("failed", "Manifest HTTP client initialization failed");
-        return false;
-    }
-    http.addHeader("X-Device-ID", String(_deviceId));
-    http.addHeader("X-Device-Timestamp", String(ts));
-    http.addHeader("X-Device-Signature", hmacSHA256(_deviceKey, message.c_str()));
-    http.addHeader("Accept", "application/json");
-
-    int httpCode = http.GET();
-    bool ok = (httpCode == HTTP_CODE_OK);
-    if (ok)
-        responseBody = http.getString();
-    else
-    {
-        _Debug("OTA HTTP " + String(httpCode) + ": " + url);
-        _Debug("OTA HTTP error: " + http.errorToString(httpCode));
-    }
-
-    http.end();
-    return ok;
-#else
-    (void)responseBody;
-    return false;
-#endif
-}
-
-bool Firmngin::checkOTA()
-{
-    if (!_otaEnabled)
-        return publishOTAStatus("disabled", "OTA is not enabled");
-
-    if (_otaBaseUrl.length() == 0)
-        return publishOTAStatus("skipped", "OTA base URL is not configured");
-
-    publishOTAStatus("checking", "Requesting manifest");
-
-    char query[256];
-    int pos = 0;
-    if (_firmwareTargetBoard.length() > 0)
-    {
-        pos += snprintf(query + pos, sizeof(query) - pos,
-                        "target_board=%s&", _firmwareTargetBoard.c_str());
-    }
-    if (_firmwareTargetModel.length() > 0)
-    {
-        pos += snprintf(query + pos, sizeof(query) - pos,
-                        "target_model=%s&", _firmwareTargetModel.c_str());
-    }
-    pos += snprintf(query + pos, sizeof(query) - pos,
-                    "current_version=%s", _firmwareVersion.c_str());
-
-    String body;
-    if (!otaHTTPGet("/manifest", query, body))
-    {
-        publishOTAStatus("failed", "Manifest request failed");
-        return false;
-    }
-
-    int idStart = body.indexOf("\"firmware_id\":\"");
-    int verStart = body.indexOf("\"version\":\"");
-    int shaStart = body.indexOf("\"sha256\":\"");
-
-    if (idStart < 0)
-    {
-        publishOTAStatus("uptodate", "No update available");
-        return true;
-    }
-
-    idStart += 15;
-    _otaFirmwareID = body.substring(idStart, body.indexOf("\"", idStart));
-    verStart += 11;
-    String newVer = body.substring(verStart, body.indexOf("\"", verStart));
-    shaStart += 10;
-    _otaFirmwareSHA256 = body.substring(shaStart, body.indexOf("\"", shaStart));
-
-    char msg[128];
-    snprintf(msg, sizeof(msg), "Update available: %s", newVer.c_str());
-    publishOTAStatus("available", msg);
-    return true;
-}
-
-bool Firmngin::performOTA(const char *manifestUrl)
-{
-    (void)manifestUrl;
-
-    if (_otaAsyncState != OTA_ASYNC_IDLE)
-        return publishOTAStatus("skipped", "OTA already in progress");
-
-    if (!_otaEnabled)
-    {
-        _otaAsyncState = OTA_ASYNC_IDLE;
-        _otaFirmwareID = "";
-        return publishOTAStatus("disabled", "OTA is not enabled");
-    }
-
-    if (_otaFirmwareID.length() == 0)
-    {
-        if (!checkOTA())
-        {
-            _otaAsyncState = OTA_ASYNC_IDLE;
-            _otaFirmwareID = "";
-            return false;
-        }
-    }
-
-    if (_otaFirmwareID.length() == 0)
-    {
-        _otaAsyncState = OTA_ASYNC_IDLE;
-        _otaFirmwareID = "";
-        return publishOTAStatus("skipped", "No firmware available");
-    }
-
-    publishOTAStatus("downloading", "Starting firmware download");
-
-    String downloadPath = String("/firmware/") + _otaFirmwareID + "/download";
-
-#if defined(ESP32)
-    String url = _otaBaseUrl + downloadPath;
-    const char *activeServiceCA = _activeServiceCACert();
-#if defined(ESP32)
-    if (_insecure)
-    {
-        _otaWifiClient.setInsecure();
-    }
-    else
-    {
-        if (activeServiceCA == nullptr)
-        {
-            _otaAsyncState = OTA_ASYNC_IDLE;
-            publishOTAStatus("failed", "Service CA certificate is not configured");
-            _otaFirmwareID = "";
-            return false;
-        }
-        _otaWifiClient.setCACert(activeServiceCA);
-    }
-    if (_clientCert != nullptr)
-        _otaWifiClient.setCertificate(_clientCert);
-    if (_privateKey != nullptr)
-        _otaWifiClient.setPrivateKey(_privateKey);
-#endif
-    if (!_otaHttp.begin(_otaWifiClient, url))
-    {
-        _otaAsyncState = OTA_ASYNC_IDLE;
-        publishOTAStatus("failed", "Firmware HTTP client initialization failed");
-        _otaFirmwareID = "";
-        return false;
-    }
-
-    unsigned long ts = time(nullptr);
-    String message = String(_deviceId) + "." + String(ts) + ".GET." + downloadPath;
-    _otaHttp.addHeader("X-Device-ID", String(_deviceId));
-    _otaHttp.addHeader("X-Device-Timestamp", String(ts));
-    _otaHttp.addHeader("X-Device-Signature", hmacSHA256(_deviceKey, message.c_str()));
-
-    int httpCode = _otaHttp.GET();
-    if (httpCode != HTTP_CODE_OK)
-    {
-        _Debug("OTA download HTTP " + String(httpCode));
-        _Debug("OTA download error: " + _otaHttp.errorToString(httpCode));
-        _otaHttp.end();
-        _otaAsyncState = OTA_ASYNC_IDLE;
-        publishOTAStatus("failed", "Firmware download failed");
-        _otaFirmwareID = "";
-        return false;
-    }
-
-    _otaContentLength = _otaHttp.getSize();
-    if (_debug)
-    {
-        Serial.print("OTA download started (async). Size: ");
-        Serial.print(_otaContentLength >= 0 ? String(_otaContentLength / 1024) : String("unknown"));
-        if (_otaContentLength >= 0)
-            Serial.println(" KB");
-        else
-            Serial.println();
-    }
-
-    _otaBuffer = (uint8_t *)malloc(FIRMWARE_BUFFER_SIZE);
-    if (_otaBuffer == nullptr)
-    {
-        _otaHttp.end();
-        _otaAsyncState = OTA_ASYNC_IDLE;
-        publishOTAStatus("failed", "Firmware buffer allocation failed");
-        _otaFirmwareID = "";
-        return false;
-    }
-    _otaDownloaded = 0;
-    _otaLastProgressBucket = -1;
-    _otaLastPublishedProgressBucket = -1;
-    _otaLastDebugAt = 0;
-
-#if defined(ESP32)
-    mbedtls_md_init(&_otaSha256Ctx);
-    mbedtls_md_setup(&_otaSha256Ctx, mbedtls_md_info_from_type(MBEDTLS_MD_SHA256), 0);
-    mbedtls_md_starts(&_otaSha256Ctx);
-#endif
-
-    if (_otaContentLength > 0 && !Update.begin(_otaContentLength))
-    {
-        if (_debug)
-            Serial.println("OTA Update.begin() failed: " + String(Update.getError()));
-        _otaCleanup();
-        publishOTAStatus("failed", "Update.begin() failed");
-        _otaFirmwareID = "";
-        return false;
-    }
-
-    _otaAsyncState = OTA_ASYNC_DOWNLOADING;
-    return true;
-#else
-    _otaAsyncState = OTA_ASYNC_IDLE;
-    _otaFirmwareID = "";
-    return publishOTAStatus("skipped", "Platform not supported for HTTP OTA");
-#endif
-}
-
-void Firmngin::_processOTA()
-{
-    if (_otaAsyncState == OTA_ASYNC_IDLE || _otaAsyncState == OTA_ASYNC_FAILED)
-        return;
-
-    if (_otaAsyncState == OTA_ASYNC_DOWNLOADING)
-    {
-        WiFiClient *stream = _otaHttp.getStreamPtr();
-        if (stream == nullptr)
-        {
-            _otaCleanup();
-            publishOTAStatus("failed", "HTTP stream lost");
-            _otaFirmwareID = "";
-            return;
-        }
-
-        size_t available = stream->available();
-        if (available == 0)
-        {
-            if (!_otaHttp.connected())
-                _otaAsyncState = OTA_ASYNC_VERIFYING;
-            return;
-        }
-
-        int toRead = min((int)available, FIRMWARE_BUFFER_SIZE);
-        int readLen = stream->readBytes(_otaBuffer, toRead);
-        if (readLen <= 0)
-        {
-            if (!_otaHttp.connected())
-                _otaAsyncState = OTA_ASYNC_VERIFYING;
-            return;
-        }
-
-        _otaDownloaded += readLen;
-
-        yield();
-
-#if defined(ESP32)
-        mbedtls_md_update(&_otaSha256Ctx, _otaBuffer, readLen);
-#endif
-
-        if (_otaContentLength > 0)
-        {
-            size_t written = Update.write(_otaBuffer, readLen);
-            if (written != (size_t)readLen)
-            {
-                if (_debug)
-                    Serial.println("OTA Update.write() failed: " + String(Update.getError()));
-                Update.abort();
-                _otaCleanup();
-                publishOTAStatus("failed", "Firmware write failed");
-                _otaFirmwareID = "";
-                return;
-            }
-
-            int progress = (_otaDownloaded * 100) / _otaContentLength;
-            int progressBucket = progress / 10;
-
-            if (progressBucket != _otaLastPublishedProgressBucket || progress == 100)
-            {
-                _otaLastPublishedProgressBucket = progressBucket;
-                char progressValue[8];
-                snprintf(progressValue, sizeof(progressValue), "%d", progress);
-                char progressPayload[160];
-                firmngin_json::ArrayBuilder b(progressPayload, sizeof(progressPayload));
-                b.reset();
-                b.add("ots", "downloading");
-                b.add("otp", progressValue);
-                if (_otaFirmwareID.length() > 0)
-                    b.add("ofd", _otaFirmwareID.c_str());
-                updateEntities(b.build());
-            }
-
-            if (_debug)
-            {
-                if (progressBucket != _otaLastProgressBucket || progress == 100)
-                {
-                    _otaLastProgressBucket = progressBucket;
-                    Serial.print("OTA download progress: ");
-                    Serial.print(progress);
-                    Serial.print("% (");
-                    Serial.print(_otaDownloaded / 1024);
-                    Serial.print("/");
-                    Serial.print(_otaContentLength / 1024);
-                    Serial.println(" KB)");
-                }
-            }
-        }
-        else if (_debug && millis() - _otaLastDebugAt > 1000)
-        {
-            _otaLastDebugAt = millis();
-            Serial.print("OTA download received: ");
-            Serial.print(_otaDownloaded / 1024);
-            Serial.println(" KB");
-        }
-        else if (millis() - _otaLastDebugAt > 1000)
-        {
-            _otaLastDebugAt = millis();
-            int estimated = _otaDownloaded / 32;
-            if (estimated < 0)
-                estimated = 0;
-            if (estimated > 99)
-                estimated = 99;
-            char progressValue[8];
-            snprintf(progressValue, sizeof(progressValue), "%d", estimated);
-            char progressPayload[160];
-            firmngin_json::ArrayBuilder b(progressPayload, sizeof(progressPayload));
-            b.reset();
-            b.add("ots", "downloading");
-            b.add("otp", progressValue);
-            if (_otaFirmwareID.length() > 0)
-                b.add("ofd", _otaFirmwareID.c_str());
-            updateEntities(b.build());
-
-            if (_debug)
-            {
-                Serial.print("OTA download received: ");
-                Serial.print(_otaDownloaded / 1024);
-                Serial.println(" KB");
-            }
-        }
-
-        if (_otaContentLength > 0 && _otaDownloaded >= _otaContentLength)
-        {
-            _otaAsyncState = OTA_ASYNC_VERIFYING;
-        }
-        else
-        {
-            if (_otaHttp.connected() || _otaContentLength < 0 || _otaDownloaded < _otaContentLength)
-                return;
-
-            _otaAsyncState = OTA_ASYNC_VERIFYING;
-        }
-    }
-
-    if (_otaAsyncState == OTA_ASYNC_VERIFYING)
-    {
-        _otaHttp.end();
-
-        if (_otaContentLength > 0 && _otaDownloaded != _otaContentLength)
-        {
-            Update.abort();
-            _otaCleanup();
-            publishOTAStatus("failed", "Firmware download incomplete");
-            _otaFirmwareID = "";
-            return;
-        }
-
-#if defined(ESP32)
-        uint8_t computedHash[32];
-        mbedtls_md_finish(&_otaSha256Ctx, computedHash);
-        mbedtls_md_free(&_otaSha256Ctx);
-#endif
-
-#if defined(ESP32)
-        char computedHex[65];
-        for (int i = 0; i < 32; i++)
-            sprintf(computedHex + (i * 2), "%02x", computedHash[i]);
-        computedHex[64] = '\0';
-
-        if (_otaFirmwareSHA256.length() > 0 && _otaFirmwareSHA256 != computedHex)
-        {
-            if (_debug)
-            {
-                Serial.print("OTA SHA256 mismatch: expected ");
-                Serial.print(_otaFirmwareSHA256);
-                Serial.print(", got ");
-                Serial.println(computedHex);
-            }
-            Update.abort();
-            _otaCleanup();
-            publishOTAStatus("failed", "SHA256 mismatch");
-            _otaFirmwareID = "";
-            return;
-        }
-
-        if (_debug)
-        {
-            Serial.print("OTA SHA256 verified OK: ");
-            Serial.println(computedHex);
-        }
-#endif
-        publishOTAStatus("installing", "Installing firmware");
-        _otaAsyncState = OTA_ASYNC_INSTALLING;
-    }
-
-    if (_otaAsyncState == OTA_ASYNC_INSTALLING)
-    {
-        if (_debug)
-        {
-            Serial.print("OTA download completed: ");
-            Serial.print(_otaDownloaded / 1024);
-            Serial.println(" KB");
-        }
-
-        if (!Update.end())
-        {
-            if (_debug)
-                Serial.println("OTA Update.end() failed: " + String(Update.getError()));
-            _otaCleanup();
-            publishOTAStatus("failed", "Update.end() failed");
-            _otaFirmwareID = "";
-            return;
-        }
-
-        publishOTAStatus("installing", "Finalizing firmware install");
-        publishOTAStatus("installed", "Firmware installed");
-        publishOTAStatus("rebooting", "Rebooting device");
-        _otaFirmwareID = "";
-
-        free(_otaBuffer);
-        _otaBuffer = nullptr;
-        _otaAsyncState = OTA_ASYNC_IDLE;
-
-        if (_debug)
-            Serial.println("OTA installed successfully, rebooting...");
-        delay(500);
-        ESP.restart();
-    }
-}
-
-void Firmngin::_otaCleanup()
-{
-    _otaAsyncState = OTA_ASYNC_FAILED;
-    _otaHttp.end();
-    if (_otaBuffer != nullptr)
-    {
-        free(_otaBuffer);
-        _otaBuffer = nullptr;
-    }
-#if defined(ESP32)
-    mbedtls_md_free(&_otaSha256Ctx);
-#endif
-    _otaDownloaded = 0;
-    _otaContentLength = 0;
-}
-
-void Firmngin::onOTAStatus(OTACallbackFunction callback)
-{
-    _otaCallback = callback;
-}
-
-int Firmngin::normalizeOTAProgress(const char *status, const char *message)
-{
-    int progress = 0;
-    String statusStr = status != nullptr ? String(status) : String("");
-    statusStr.toLowerCase();
-
-    if (statusStr == "checking")
-        progress = 5;
-    else if (statusStr == "available")
-        progress = 10;
-    else if (statusStr == "downloading")
-        progress = 25;
-    else if (statusStr == "verifying")
-        progress = 95;
-    else if (statusStr == "installing")
-        progress = 97;
-    else if (statusStr == "rebooting" || statusStr == "booting")
-        progress = 99;
-    else if (statusStr == "installed" || statusStr == "completed" || statusStr == "uptodate" || statusStr == "skipped")
-        progress = 100;
-    else if (statusStr == "failed" || statusStr == "triggered")
-        progress = 0;
-
-    if (message != nullptr)
-    {
-        String msg = String(message);
-        int start = -1;
-        for (unsigned int i = 0; i < msg.length(); i++)
-        {
-            if (isDigit(msg.charAt(i)))
-            {
-                start = (int)i;
-                break;
-            }
-        }
-
-        if (start >= 0)
-        {
-            int end = start;
-            while ((unsigned int)end < msg.length() && isDigit(msg.charAt(end)))
-                end++;
-            int parsed = msg.substring(start, end).toInt();
-            if (parsed >= 0 && parsed <= 100)
-                progress = parsed;
-            else if (parsed > 100)
-                progress = 100;
-        }
-    }
-
-    if (progress < 0)
-        progress = 0;
-    if (progress > 100)
-        progress = 100;
-    return progress;
-}
-
-bool Firmngin::publishOTAStatus(const char *status, const char *message)
-{
-    if (_debug)
-    {
-        Serial.print("OTA status: ");
-        Serial.print(status);
-        Serial.print(" - ");
-        Serial.println(message);
-    }
-
-    if (_otaCallback)
-        _otaCallback(status, message);
-    for (const auto &callback : _otaCallbacks)
-    {
-        if (callback)
-        {
-            callback(status, message);
-        }
-    }
-
-    char buf[512];
-    firmngin_json::ArrayBuilder b(buf, sizeof(buf));
-    b.reset();
-    b.add("ots", status);
-    char progressValue[8];
-    snprintf(progressValue, sizeof(progressValue), "%d", normalizeOTAProgress(status, message));
-    b.add("otp", progressValue);
-    if (_otaFirmwareID.length() > 0)
-        b.add("ofd", _otaFirmwareID.c_str());
-
-    return updateEntities(b.build());
-}
-#endif
 
 // ==================== AUDIO STREAM ====================
-#if defined(ESP32)
+#if defined(ESP_PLATFORM)
 void Firmngin::_audioWsEventHandler(void *handlerArgs, esp_event_base_t, int32_t eventId, void *eventData)
 {
     Firmngin *self = static_cast<Firmngin *>(handlerArgs);
@@ -3444,7 +3089,7 @@ void Firmngin::_audioWsEventHandler(void *handlerArgs, esp_event_base_t, int32_t
         if (self->_audioKeepAlive)
         {
             self->_audioReconnectPending = true;
-            self->_audioReconnectAtMs = millis() + 2000;
+            self->_audioReconnectAtMs = fng_now_ms() + 2000;
         }
         self->_notifyAudioEvent(AUDIO_DISCONNECTED, "audio stream disconnected");
         break;
@@ -3454,7 +3099,7 @@ void Firmngin::_audioWsEventHandler(void *handlerArgs, esp_event_base_t, int32_t
         if (self->_audioKeepAlive)
         {
             self->_audioReconnectPending = true;
-            self->_audioReconnectAtMs = millis() + 2000;
+            self->_audioReconnectAtMs = fng_now_ms() + 2000;
         }
         self->_notifyAudioEvent(AUDIO_ERROR, "audio stream error");
         break;
@@ -3466,7 +3111,7 @@ void Firmngin::_audioWsEventHandler(void *handlerArgs, esp_event_base_t, int32_t
 
 void Firmngin::_notifyAudioEvent(FirmnginAudioEvent event, const char *detail, const char *entityKey)
 {
-#if defined(ESP32)
+#if defined(ESP_PLATFORM)
     if (_audioEvents != nullptr)
     {
         FirmnginAudioEventMessage message = {};
@@ -3492,25 +3137,25 @@ void Firmngin::_notifyAudioEvent(FirmnginAudioEvent event, const char *detail, c
         return;
     }
     if (_audioEntityCallbacks.empty() && event == AUDIO_ERROR)
-        Serial.printf("[firmngin] audio error: %s\n", detail != nullptr ? detail : "unknown");
+        Console.printf("[firmngin] audio error: %s\n", detail != nullptr ? detail : "unknown");
 }
 
 void Firmngin::_processAudio()
 {
-#if !defined(ESP32)
+#if !defined(ESP_PLATFORM)
     return;
 #else
     _tryAutoConnectAudio();
 
     if (_audioReconnectPending && _audioKeepAlive && _hasAudioInterfaceConfigured() &&
-        static_cast<long>(millis() - _audioReconnectAtMs) >= 0)
+        static_cast<long>(fng_now_ms() - _audioReconnectAtMs) >= 0)
     {
         _audioReconnectPending = false;
         _stopAudioWs();
         if (!_startAudioWsClient())
         {
             _audioReconnectPending = true;
-            _audioReconnectAtMs = millis() + 5000;
+            _audioReconnectAtMs = fng_now_ms() + 5000;
         }
     }
 
@@ -3577,7 +3222,7 @@ void Firmngin::_processAudio()
             if (_audioEventCallback)
                 _audioEventCallback(message.event, eventDetail);
             else if (_audioEntityCallbacks.empty() && message.event == AUDIO_ERROR)
-                Serial.printf("[firmngin] audio error: %s\n",
+                Console.printf("[firmngin] audio error: %s\n",
                               eventDetail != nullptr ? eventDetail : "unknown");
         }
     }
@@ -3663,138 +3308,120 @@ bool Firmngin::uploadImage(const char *entityKey, uint8_t *data, size_t len, con
 
     if (_debug)
     {
-        Serial.print("[CAMERA] Uploading ");
-        Serial.print(len);
-        Serial.print(" bytes as ");
-        Serial.println(contentType);
+        Console.print("[CAMERA] Uploading ");
+        Console.print(len);
+        Console.print(" bytes as ");
+        Console.println(contentType);
     }
 
-#if defined(ESP32)
+#if defined(ESP_PLATFORM)
     String url = _apiBaseUrl + "/device-camera/upload";
 
     unsigned long ts = time(nullptr);
     String path = "/device-camera/upload";
     String message = String(_deviceId) + "." + String(ts) + ".POST." + path;
-    String signature = hmacSHA256(_deviceKey, message.c_str());
+    String signature = firmngin_hmac_sha256_hex(_deviceKey, message.c_str());
     const char *activeServiceCA = _activeServiceCACert();
 
-    HTTPClient http;
-#if defined(ESP32)
-    WiFiClientSecure cameraClient;
-    if (_insecure)
+    const char *securityError = firmngin_http_security_error(
+        _insecure, activeServiceCA != nullptr, fng_http_insecure_supported());
+    if (securityError != nullptr)
     {
-        cameraClient.setInsecure();
+        if (onError)
+            onError(0, securityError);
+        return false;
     }
-    else
-    {
-        if (activeServiceCA == nullptr)
-        {
-            if (onError)
-                onError(0, "service CA certificate not configured");
-            return false;
-        }
-        cameraClient.setCACert(activeServiceCA);
-    }
-    if (_clientCert != nullptr)
-        cameraClient.setCertificate(_clientCert);
-    if (_privateKey != nullptr)
-        cameraClient.setPrivateKey(_privateKey);
-#endif
 
-    if (!http.begin(cameraClient, url))
+    esp_http_client_config_t config = fng_http_config(url.c_str(), activeServiceCA, _clientCert, _privateKey, _insecure);
+    esp_http_client_handle_t client = esp_http_client_init(&config);
+    if (client == nullptr)
     {
         if (onError)
             onError(0, "HTTP client init failed");
         return false;
     }
 
-    // Add HMAC headers
-    http.addHeader("X-Device-ID", String(_deviceId));
-    http.addHeader("X-Device-Timestamp", String(ts));
-    http.addHeader("X-Device-Signature", signature);
+    // Multipart form: a fixed boundary is safe here because entity-key values and
+    // JPEG bytes never contain it.
+    String boundary = "----FirmnginBoundary" + String(fng_now_ms());
+    char contentTypeHeaderBuf[96];
+    snprintf(contentTypeHeaderBuf, sizeof(contentTypeHeaderBuf), "multipart/form-data; boundary=%s", boundary.c_str());
 
-    // Build multipart form data
-    String boundary = "----FirmnginBoundary" + String(millis());
-    String contentTypeHeader = "multipart/form-data; boundary=" + boundary;
-    http.addHeader("Content-Type", contentTypeHeader);
+    String part1 = "";
+    part1 += "--" + boundary + "\r\n";
+    part1 += "Content-Disposition: form-data; name=\"entity_key\"\r\n\r\n";
+    part1 += String(entityKey) + "\r\n";
+    part1 += "--" + boundary + "\r\n";
+    part1 += "Content-Disposition: form-data; name=\"image\"; filename=\"capture.jpg\"\r\n";
+    part1 += "Content-Type: " + String(contentType) + "\r\n\r\n";
+    String part3 = "\r\n--" + boundary + "--\r\n";
 
-    // Build body
-    String body = "";
-    body += "--" + boundary + "\r\n";
-    body += "Content-Disposition: form-data; name=\"entity_key\"\r\n\r\n";
-    body += String(entityKey) + "\r\n";
-    body += "--" + boundary + "\r\n";
-    body += "Content-Disposition: form-data; name=\"image\"; filename=\"capture.jpg\"\r\n";
-    body += "Content-Type: " + String(contentType) + "\r\n\r\n";
+    size_t totalLen = part1.length() + len + part3.length();
 
-    // Calculate total content length
-    size_t bodyHeaderLen = body.length();
-    size_t bodyFooterLen = ("\r\n--" + boundary + "--\r\n").length();
-    size_t totalLen = bodyHeaderLen + len + bodyFooterLen;
+    esp_http_client_set_method(client, HTTP_METHOD_POST);
+    esp_http_client_set_header(client, "X-Device-ID", _deviceId);
+    char tsBuf[24];
+    snprintf(tsBuf, sizeof(tsBuf), "%lu", ts);
+    esp_http_client_set_header(client, "X-Device-Timestamp", tsBuf);
+    esp_http_client_set_header(client, "X-Device-Signature", signature.c_str());
+    esp_http_client_set_header(client, "Content-Type", contentTypeHeaderBuf);
 
-    // Use chunked transfer or content length
-    http.addHeader("Content-Length", String(totalLen));
+    bool sentOk = false;
+    int statusCode = 0;
+    if (esp_http_client_open(client, static_cast<int>(totalLen)) == ESP_OK)
+    {
+        int writeErr = 0;
+        // Fixed-content-length upload: write part1, raw image, then footer.
+        if (esp_http_client_write(client, part1.c_str(), static_cast<int>(part1.length())) != static_cast<int>(part1.length()))
+            writeErr = 1;
+        if (writeErr == 0 && esp_http_client_write(client, reinterpret_cast<const char *>(data), static_cast<int>(len)) != static_cast<int>(len))
+            writeErr = 2;
+        if (writeErr == 0 && esp_http_client_write(client, part3.c_str(), static_cast<int>(part3.length())) != static_cast<int>(part3.length()))
+            writeErr = 3;
+        if (writeErr == 0)
+        {
+            sentOk = esp_http_client_fetch_headers(client) >= 0;
+            if (sentOk)
+            {
+                statusCode = esp_http_client_get_status_code(client);
+                sentOk = statusCode == 200;
+            }
+        }
+    }
+
+    String response;
+    FirmnginHttpBodyResult bodyResult = FirmnginHttpBodyResult::Incomplete;
+    if (sentOk)
+    {
+        bodyResult = firmngin_read_http_body(
+            [client](char *data, size_t capacity) {
+                return esp_http_client_read(client, data, static_cast<int>(capacity));
+            },
+            [client]() { return esp_http_client_is_complete_data_received(client); },
+            response, 4096);
+        sentOk = bodyResult == FirmnginHttpBodyResult::Complete;
+    }
+
+    esp_http_client_close(client);
+    esp_http_client_cleanup(client);
+
+    if (!sentOk)
+    {
+        if (onError)
+            onError(statusCode, bodyResult == FirmnginHttpBodyResult::TooLarge
+                           ? "upload response exceeds 4096 bytes"
+                           : "upload request or response incomplete");
+        return false;
+    }
 
     if (_debug)
     {
-        Serial.print("[CAMERA] URL: ");
-        Serial.println(url);
-        Serial.print("[CAMERA] Content-Length: ");
-        Serial.println(totalLen);
+        Console.print("[CAMERA] HTTP 200, response: ");
+        Console.println(response);
     }
-
-    // Send request - we need to write body manually for binary data
-    int httpCode = http.sendRequest("POST", (uint8_t *)nullptr, 0);
-
-    if (httpCode > 0)
-    {
-        // Write the multipart body
-        WiFiClient *stream = http.getStreamPtr();
-
-        // Write header part
-        stream->write((const uint8_t *)body.c_str(), bodyHeaderLen);
-
-        // Write image data
-        stream->write(data, len);
-
-        // Write footer
-        String footer = "\r\n--" + boundary + "--\r\n";
-        stream->write((const uint8_t *)footer.c_str(), footer.length());
-
-        // Wait for response
-        httpCode = http.GET();
-    }
-
-    if (httpCode > 0)
-    {
-        if (_debug)
-        {
-            Serial.print("[CAMERA] HTTP ");
-            Serial.println(httpCode);
-        }
-
-        if (httpCode == HTTP_CODE_OK)
-        {
-            String response = http.getString();
-            if (onSuccess)
-                onSuccess(response.c_str());
-            http.end();
-            return true;
-        }
-        else
-        {
-            if (onError)
-                onError(httpCode, http.errorToString(httpCode).c_str());
-        }
-    }
-    else
-    {
-        if (onError)
-            onError(httpCode, http.errorToString(httpCode).c_str());
-    }
-
-    http.end();
-    return false;
+    if (onSuccess)
+        onSuccess(response.c_str());
+    return true;
 
 #else
     if (onError)
@@ -3964,390 +3591,3 @@ bool LocationUpdate::_dispatch()
     _sent = true;
     return _instance->updateEntities(_builder.build());
 }
-
-#if 0
-// Persistent queue implementation moved to queue.cpp.
-void Firmngin::setQueueEnabled(bool enabled)
-{
-    _queueEnabled = enabled;
-    if (enabled && !_queueFileReady)
-    {
-        if (!_initQueue())
-        {
-            _Debug("queue: init failed, persistent queue disabled", true);
-        }
-    }
-}
-
-void Firmngin::setMaxQueueEntries(uint16_t maxEntries)
-{
-    if (_queueFileReady)
-    {
-        _Debug("queue: cannot resize after init; call before setQueueEnabled()", true);
-        return;
-    }
-    if (maxEntries < FIRMNGIN_QUEUE_MIN_CAPACITY)
-        maxEntries = FIRMNGIN_QUEUE_MIN_CAPACITY;
-    if (maxEntries > FIRMNGIN_QUEUE_MAX_CAPACITY)
-        maxEntries = FIRMNGIN_QUEUE_MAX_CAPACITY;
-    _queueCapacity = maxEntries;
-}
-
-uint16_t Firmngin::getQueueSize() const
-{
-    return _queueCount;
-}
-
-void Firmngin::clearQueue()
-{
-    if (!_queueFileReady)
-        return;
-    _queueHead = 0;
-    _queueTail = 0;
-    _queueCount = 0;
-    _writeQueueHeader(0, 0, 0);
-    if (_debug)
-    {
-        Serial.println(F("[firmngin] queue: cleared"));
-    }
-}
-
-bool Firmngin::_initQueue()
-{
-#if defined(ESP32)
-    if (_queueFileReady)
-        return true;
-
-    if (!LittleFS.begin(true))
-    {
-        _Debug("queue: LITTLEFS mount failed", true);
-        return false;
-    }
-
-    if (!LittleFS.exists(FIRMNGIN_QUEUE_FILE_NAME))
-    {
-        _resetQueueFile();
-        _queueFileReady = true;
-        if (_debug)
-        {
-            Serial.print(F("[firmngin] queue: created file, capacity="));
-            Serial.println(_queueCapacity);
-        }
-        return true;
-    }
-
-    uint16_t head, tail, count;
-    if (!_readQueueHeader(head, tail, count))
-    {
-        _Debug("queue: file corrupt, recreating", true);
-        LittleFS.remove(FIRMNGIN_QUEUE_FILE_NAME);
-        _resetQueueFile();
-        _queueFileReady = true;
-        return true;
-    }
-
-    _queueHead = head;
-    _queueTail = tail;
-    _queueCount = count;
-    _queueFileReady = true;
-
-    if (_debug)
-    {
-        Serial.print(F("[firmngin] queue: loaded, count="));
-        Serial.print(_queueCount);
-        Serial.print(F("/"));
-        Serial.println(_queueCapacity);
-    }
-    return true;
-#else
-    return false;
-#endif
-}
-
-void Firmngin::_shutdownQueue()
-{
-    _queueFileReady = false;
-#if defined(ESP32)
-    LittleFS.end();
-#endif
-}
-
-void Firmngin::_resetQueueFile()
-{
-    _queueHead = 0;
-    _queueTail = 0;
-    _queueCount = 0;
-
-#if defined(ESP32)
-    File f = LittleFS.open(FIRMNGIN_QUEUE_FILE_NAME, "w");
-    if (!f)
-        return;
-
-    size_t fileSize = FIRMNGIN_QUEUE_HEADER_SIZE + (size_t)_queueCapacity * FIRMNGIN_QUEUE_RECORD_SIZE;
-    uint8_t zero[64] = {0};
-    size_t remaining = fileSize;
-    while (remaining > 0)
-    {
-        size_t chunk = remaining > sizeof(zero) ? sizeof(zero) : remaining;
-        if (f.write(zero, chunk) != chunk)
-            break;
-        remaining -= chunk;
-    }
-    f.close();
-
-    _writeQueueHeader(0, 0, 0);
-#endif
-}
-
-bool Firmngin::_readQueueHeader(uint16_t &head, uint16_t &tail, uint16_t &count)
-{
-#if defined(ESP32)
-    File f = LittleFS.open(FIRMNGIN_QUEUE_FILE_NAME, "r");
-    if (!f || f.size() < FIRMNGIN_QUEUE_HEADER_SIZE)
-    {
-        if (f)
-            f.close();
-        return false;
-    }
-
-    uint8_t hdr[FIRMNGIN_QUEUE_HEADER_SIZE];
-    if (f.readBytes((char *)hdr, FIRMNGIN_QUEUE_HEADER_SIZE) != FIRMNGIN_QUEUE_HEADER_SIZE)
-    {
-        f.close();
-        return false;
-    }
-    f.close();
-
-    uint32_t magic = (uint32_t)hdr[0] | ((uint32_t)hdr[1] << 8) | ((uint32_t)hdr[2] << 16) | ((uint32_t)hdr[3] << 24);
-    if (magic != FIRMNGIN_QUEUE_MAGIC)
-        return false;
-
-    uint16_t version = (uint16_t)hdr[4] | ((uint16_t)hdr[5] << 8);
-    if (version != FIRMNGIN_QUEUE_VERSION)
-        return false;
-
-    head = (uint16_t)hdr[8] | ((uint16_t)hdr[9] << 8);
-    tail = (uint16_t)hdr[10] | ((uint16_t)hdr[11] << 8);
-    count = (uint16_t)hdr[12] | ((uint16_t)hdr[13] << 8);
-
-    if (head >= _queueCapacity || tail >= _queueCapacity || count > _queueCapacity)
-        return false;
-    return true;
-#else
-    return false;
-#endif
-}
-
-bool Firmngin::_writeQueueHeader(uint16_t head, uint16_t tail, uint16_t count)
-{
-#if defined(ESP32)
-    File f = LittleFS.open(FIRMNGIN_QUEUE_FILE_NAME, "r+");
-    if (!f)
-        return false;
-    if (!f.seek(0))
-    {
-        f.close();
-        return false;
-    }
-
-    uint8_t hdr[FIRMNGIN_QUEUE_HEADER_SIZE];
-    memset(hdr, 0, sizeof(hdr));
-    hdr[0] = FIRMNGIN_QUEUE_MAGIC & 0xFF;
-    hdr[1] = (FIRMNGIN_QUEUE_MAGIC >> 8) & 0xFF;
-    hdr[2] = (FIRMNGIN_QUEUE_MAGIC >> 16) & 0xFF;
-    hdr[3] = (FIRMNGIN_QUEUE_MAGIC >> 24) & 0xFF;
-    hdr[4] = FIRMNGIN_QUEUE_VERSION & 0xFF;
-    hdr[5] = (FIRMNGIN_QUEUE_VERSION >> 8) & 0xFF;
-    hdr[6] = 0;
-    hdr[7] = 0;
-    hdr[8] = head & 0xFF;
-    hdr[9] = (head >> 8) & 0xFF;
-    hdr[10] = tail & 0xFF;
-    hdr[11] = (tail >> 8) & 0xFF;
-    hdr[12] = count & 0xFF;
-    hdr[13] = (count >> 8) & 0xFF;
-    hdr[14] = 0;
-    hdr[15] = 0;
-
-    size_t wrote = f.write(hdr, FIRMNGIN_QUEUE_HEADER_SIZE);
-    f.close();
-    return wrote == FIRMNGIN_QUEUE_HEADER_SIZE;
-#else
-    return false;
-#endif
-}
-
-bool Firmngin::_enqueueToQueue(const char *topic, const uint8_t *payload, size_t payloadLen, bool retained)
-{
-#if defined(ESP32)
-    if (!_queueFileReady || topic == nullptr || payload == nullptr)
-        return false;
-
-    size_t topicLen = strnlen(topic, FIRMNGIN_QUEUE_TOPIC_MAX + 1);
-    if (topicLen == 0 || topicLen > FIRMNGIN_QUEUE_TOPIC_MAX || payloadLen > FIRMNGIN_QUEUE_PAYLOAD_MAX)
-    {
-        if (_debug)
-        {
-            Serial.print(F("[firmngin] queue: payload too large (topic="));
-            Serial.print(topicLen);
-            Serial.print(F(", payload="));
-            Serial.print(payloadLen);
-            Serial.println(F(")"));
-        }
-        return false;
-    }
-
-    if (_queueCount >= _queueCapacity)
-    {
-        _queueHead = (_queueHead + 1) % _queueCapacity;
-        _queueCount--;
-        if (_debug)
-        {
-            Serial.println(F("[firmngin] queue: full, dropped oldest"));
-        }
-    }
-
-    uint8_t record[FIRMNGIN_QUEUE_RECORD_SIZE];
-    memset(record, 0, sizeof(record));
-    record[0] = topicLen & 0xFF;
-    record[1] = (topicLen >> 8) & 0xFF;
-    record[2] = payloadLen & 0xFF;
-    record[3] = (payloadLen >> 8) & 0xFF;
-    record[4] = retained ? 1 : 0;
-    record[5] = 0;
-    record[6] = 0;
-    record[7] = 0;
-    memcpy(record + 8, topic, topicLen);
-    memcpy(record + 8 + FIRMNGIN_QUEUE_TOPIC_MAX, payload, payloadLen);
-
-    size_t recordOffset = FIRMNGIN_QUEUE_HEADER_SIZE + (size_t)_queueTail * FIRMNGIN_QUEUE_RECORD_SIZE;
-    File f = LittleFS.open(FIRMNGIN_QUEUE_FILE_NAME, "r+");
-    if (!f)
-        return false;
-    if (!f.seek(recordOffset))
-    {
-        f.close();
-        return false;
-    }
-    size_t wrote = f.write(record, FIRMNGIN_QUEUE_RECORD_SIZE);
-    f.close();
-    if (wrote != FIRMNGIN_QUEUE_RECORD_SIZE)
-        return false;
-
-    _queueTail = (_queueTail + 1) % _queueCapacity;
-    _queueCount++;
-    _writeQueueHeader(_queueHead, _queueTail, _queueCount);
-    return true;
-#else
-    return false;
-#endif
-}
-
-bool Firmngin::_peekQueueHead(String &topic, String &payload, bool &retained)
-{
-#if defined(ESP32)
-    if (!_queueFileReady || _queueCount == 0)
-        return false;
-
-    size_t recordOffset = FIRMNGIN_QUEUE_HEADER_SIZE + (size_t)_queueHead * FIRMNGIN_QUEUE_RECORD_SIZE;
-    File f = LittleFS.open(FIRMNGIN_QUEUE_FILE_NAME, "r");
-    if (!f)
-        return false;
-    if (!f.seek(recordOffset))
-    {
-        f.close();
-        return false;
-    }
-
-    uint8_t record[FIRMNGIN_QUEUE_RECORD_SIZE];
-    if (f.readBytes((char *)record, FIRMNGIN_QUEUE_RECORD_SIZE) != FIRMNGIN_QUEUE_RECORD_SIZE)
-    {
-        f.close();
-        return false;
-    }
-    f.close();
-
-    uint16_t topicLen = (uint16_t)record[0] | ((uint16_t)record[1] << 8);
-    uint16_t payloadLen = (uint16_t)record[2] | ((uint16_t)record[3] << 8);
-    retained = record[4] != 0;
-
-    if (topicLen == 0 || topicLen > FIRMNGIN_QUEUE_TOPIC_MAX || payloadLen > FIRMNGIN_QUEUE_PAYLOAD_MAX)
-    {
-        return false;
-    }
-
-    char topicBuf[FIRMNGIN_QUEUE_TOPIC_MAX + 1];
-    char payloadBuf[FIRMNGIN_QUEUE_PAYLOAD_MAX + 1];
-    memcpy(topicBuf, record + 8, topicLen);
-    topicBuf[topicLen] = '\0';
-    memcpy(payloadBuf, record + 8 + FIRMNGIN_QUEUE_TOPIC_MAX, payloadLen);
-    payloadBuf[payloadLen] = '\0';
-
-    topic = String(topicBuf);
-    payload = String(payloadBuf, payloadLen);
-    return true;
-#else
-    return false;
-#endif
-}
-
-void Firmngin::_dropQueueHead()
-{
-    if (!_queueFileReady || _queueCount == 0)
-        return;
-    _queueHead = (_queueHead + 1) % _queueCapacity;
-    _queueCount--;
-    _writeQueueHeader(_queueHead, _queueTail, _queueCount);
-}
-
-void Firmngin::_drainQueue()
-{
-    if (!_queueEnabled || !_queueFileReady)
-        return;
-    if (!_mqttIsConnected())
-        return;
-    if (_queueCount == 0)
-    {
-        _lastQueueDrainMs = millis();
-        return;
-    }
-
-    unsigned long now = millis();
-    if (_lastQueueDrainMs != 0 && (now - _lastQueueDrainMs) < FIRMNGIN_QUEUE_DRAIN_INTERVAL_MS)
-        return;
-    _lastQueueDrainMs = now;
-
-    uint16_t toDrain = _queueCount;
-    uint16_t drained = 0;
-    uint16_t failed = 0;
-
-    while (drained + failed < toDrain)
-    {
-        String topic, payload;
-        bool retained;
-        if (!_peekQueueHead(topic, payload, retained))
-        {
-            _dropQueueHead();
-            failed++;
-            continue;
-        }
-
-        bool ok = _mqttPublish(topic.c_str(), reinterpret_cast<const uint8_t *>(payload.c_str()), payload.length(), retained);
-        if (!ok)
-        {
-            break;
-        }
-
-        _dropQueueHead();
-        drained++;
-    }
-
-    if (_debug && (drained > 0 || failed > 0))
-    {
-        Serial.print(F("[firmngin] queue: drained="));
-        Serial.print(drained);
-        Serial.print(F(", dropped_corrupt="));
-        Serial.println(failed);
-    }
-}
-#endif

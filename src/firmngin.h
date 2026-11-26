@@ -1,7 +1,11 @@
 #if !defined(FIRMNGINKIT_H)
 #define FIRMNGINKIT_H
 
-#include <Arduino.h>
+#include "fng_compat.h"
+#include "firmngin_identity.h"
+#include "firmngin_gateway.h"
+#include "firmngin_cloudlog.h"
+#include <atomic>
 #if __has_include("firmngin_version.h")
 #include "firmngin_version.h"
 #endif
@@ -11,6 +15,7 @@
 #endif
 #include "json.h"
 #include "ota_rollback.h"
+#include "ota_progress.h"
 #include "audio_stream_protocol.h"
 #include "firmngin_i2s.h"
 #include "md5.h"
@@ -18,38 +23,32 @@
 #include <map>
 #include <vector>
 #include <functional>
+#include <utility>
 
-#if defined(ESP32)
-#include <Preferences.h>
-#endif
-
-#if defined(ESP32)
+#if defined(ESP_PLATFORM)
 #include <mbedtls/gcm.h>
-#endif
-
-#if defined(ESP32)
-#include <WiFi.h>
-#include <HTTPClient.h>
-#include <WiFiClientSecure.h>
 #include <mbedtls/md.h>
-#include <LittleFS.h>
+#include <esp_http_client.h>
+#include <esp_ota_ops.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/queue.h>
 #include <freertos/semphr.h>
 #include <freertos/stream_buffer.h>
 #include <mqtt_client.h>
-#if ESP_ARDUINO_VERSION_MAJOR >= 3
+#if defined(ARDUINO)
+#include <Preferences.h>
+using FngPrefs = Preferences;
+#else
+#include "fng_nvs.h" // direct-NVS Preferences-compatible subset for pure IDF
+#endif
+#if defined(ARDUINO)
+#if defined(ESP_ARDUINO_VERSION_MAJOR) && ESP_ARDUINO_VERSION_MAJOR >= 3
 #include "esp_websocket_client_vendored.h" // vendored: core 3.x stopped bundling this IDF component
 #else
 #include <esp_websocket_client.h> // bundled with Arduino-ESP32 2.0.x
 #endif
-// The chunk callback hands the sketch I2S-ready PCM, so the matching I2S driver
-// header comes from the library: core 3.x moved to the std driver, 2.0.x keeps the
-// legacy one. The sketch only configures pins and writes frames.
-#if ESP_ARDUINO_VERSION_MAJOR >= 3
-#include <driver/i2s_std.h>
 #else
-#include <driver/i2s.h>
+#include <esp_websocket_client.h> // pure IDF: registry component (idf_component.yml)
 #endif
 #define PLATFORM_SUPPORTED true
 #define PLATFORM_NAME "ESP32"
@@ -219,15 +218,6 @@ enum DeviceStateType
     ENTITIES,
     ACTIVE_SESSION,
     ON_ACTIVE_SESSION = ACTIVE_SESSION
-};
-
-enum OTAAsyncState
-{
-    OTA_ASYNC_IDLE,
-    OTA_ASYNC_DOWNLOADING,
-    OTA_ASYNC_VERIFYING,
-    OTA_ASYNC_INSTALLING,
-    OTA_ASYNC_FAILED
 };
 
 // Minimal DeviceState class - returns raw payload only
@@ -485,6 +475,7 @@ public:
     String metadata() const { return _rawPayload; }
 };
 
+struct FirmnginOtaTransfer;
 class Firmngin;
 class ActiveSession;
 
@@ -562,8 +553,8 @@ public:
     EntityValue(const String &value) : _value(value) {}
 
     String toString() const { return _value; }
-    float toFloat() const { return _value.toFloat(); }
-    int toInt() const { return _value.toInt(); }
+    float toFloat() const { return fng_toFloat(_value); }
+    int toInt() const { return fng_toInt(_value); }
     bool isOn() const { return _value == "1" || _value == "true" || _value == "on"; }
 };
 
@@ -931,7 +922,7 @@ public:
 class Firmngin
 {
 public:
-#if defined(ESP32)
+#if defined(ESP_PLATFORM)
     Firmngin(const char *deviceId, const char *deviceKey);
     Firmngin(const char *deviceId, const char *deviceKey, const char *caCert, const char *clientCert, const char *privateKey);
     Firmngin(const char *deviceId, const char *deviceKey, const uint8_t *fingerprint, const char *clientCert, const char *privateKey);
@@ -940,8 +931,54 @@ public:
 #endif
     ~Firmngin();
 
+    // Call before begin(). Gateway sends are realtime-only and never enter an outbox.
+    // Call these APIs from setup/loop or callbacks delivered by loop().
+    void enableGateway(bool enabled = true);
+    bool syncGatewayRoutes();
+    void onGatewayRoutes(GatewayRoutesCallback callback);
+    void onChildCommand(GatewayCommandCallback callback);
+    bool publishChild(const char *localDeviceId, const char *entitiesJson, const char *sensorAt = nullptr);
+    bool reportChildStatus(const char *localDeviceId, bool online);
+    bool reportChildCommandResult(const char *commandId, const char *result);
+
+    bool setIdentity(const FirmnginIdentityRecord &identity);
+    void linkUp(bool up = true);   // net seam: overrides WiFi/Ethernet detection (IDF apps wire esp_netif here)
     void begin();
     void loop();
+
+    // Cloud debug log: every print/println/printf after begin() is echoed to
+    // Serial right away (local debugging unchanged) and buffered, then drained
+    // through the platform MQTT connection to /d/{deviceId}/lg from loop().
+    // Before begin() the calls are no-ops — early setup messages belong to
+    // Serial, the user prints there directly. Never blocks: a full buffer is
+    // dropped and counted.
+    //   fngin.println("hello from device");
+    //   fngin.printf("temp=%d\n", t);
+    CloudLog cloudlog;
+    void print(const char *v) { cloudlog.print(v); }
+    void print(const FString &v) { cloudlog.print(v); }
+    void print(int v) { cloudlog.print(v); }
+    void print(unsigned int v) { cloudlog.print(v); }
+    void print(long v) { cloudlog.print(v); }
+    void print(unsigned long v) { cloudlog.print(v); }
+    void print(float v) { cloudlog.print(v); }
+    void print(double v) { cloudlog.print(v); }
+    void print(char v) { cloudlog.print(v); }
+    void println(const char *v) { cloudlog.println(v); }
+    void println(const FString &v) { cloudlog.println(v); }
+    void println(int v) { cloudlog.println(v); }
+    void println(unsigned int v) { cloudlog.println(v); }
+    void println(long v) { cloudlog.println(v); }
+    void println(unsigned long v) { cloudlog.println(v); }
+    void println(float v) { cloudlog.println(v); }
+    void println(double v) { cloudlog.println(v); }
+    void println(char v) { cloudlog.println(v); }
+    void println() { cloudlog.println(); }
+    void printf(const char *fmt, ...);
+    size_t cloudLogSent() const { return _cloudLogSent; }
+    size_t cloudLogDropped() const { return cloudlog.dropped(); }
+    void cloudLogResetDropped() { cloudlog.resetDropped(); }
+
     static bool isProvisioned();
     void setDebug(bool debug);
     void setTimezone(int timezone);
@@ -1091,6 +1128,8 @@ public:
     const char *getFirmwareTargetModel();
     bool syncFirmwareInfo();
     void setOTABaseURL(const char *baseURL);
+    // Required for OTA; use the public key paired with the backend signer.
+    void setOTAFirmwarePublicKey(const char *publicKeyPem);
     void setEnableOTA(bool enabled = true);
     void enableOTA(bool enabled = true);
     bool checkOTA();
@@ -1105,9 +1144,27 @@ public:
                      UploadErrorCallbackFunction onError = nullptr);
 
 private:
+    std::atomic<bool> _gatewayEnabled{false};
+    std::atomic<bool> _gatewaySynced{false};
+    String _gatewaySession;
+    unsigned long _gatewayLastRequestMs = 0;
+    uint32_t _gatewaySequence = 0;
+    std::map<String, GatewayRoute> _gatewayRoutes;
+    std::map<String, bool> _gatewayOnline;
+    std::map<String, GatewayChildCommand> _gatewayPending;
+    std::map<String, int64_t> _gatewaySeen;
+    GatewayRoutesCallback _gatewayRoutesCallback;
+    GatewayCommandCallback _gatewayCommandCallback;
+    bool _gatewayPublish(const char *suffix, const String &payload);
+    String _gatewayEnvelope(const char *localDeviceId);
+    bool _gatewayAck(const GatewayChildCommand &command, const char *result);
+    bool _gatewayHandle(const String &topic, const String &payload);
+    void _gatewayConnected();
+    void _gatewayTick();
     const char *_deviceId;
     const char *_deviceKey;
     bool _identityLoaded = false;
+    bool _runtimeIdentityConfigured = false;
     bool _runtimeUseFingerprint = false;
     bool _runtimeUseCA = false;
     uint8_t _runtimeFingerprint[20] = {0};
@@ -1147,13 +1204,7 @@ private:
     bool _debug;
     unsigned long _lastMQTTAttempt;
 
-#if defined(ESP32)
-    WiFiClientSecure _wifiClient;
-    WiFiClient _plainWifiClient;
-#else
-    WiFiClient _wifiClient;
-#endif
-#if defined(ESP32)
+#if defined(ESP_PLATFORM)
     esp_mqtt_client_handle_t _mqtt = nullptr;
     volatile bool _mqttUp = false;
     volatile bool _mqttHelloPending = false;
@@ -1229,6 +1280,11 @@ private:
     String _otaBaseUrl = FIRMNGIN_OTA_BASE_URL;
     String _otaFirmwareID;
     String _otaFirmwareSHA256;
+#if defined(FIRMNGIN_HAS_OTA_FIRMWARE_PUBLIC_KEY)
+    String _otaFirmwarePublicKey = OTA_FIRMWARE_PUBLIC_KEY;
+#else
+    String _otaFirmwarePublicKey;
+#endif
     String _otaFirmwareVersion;
 
     // OTA boot rollback tracking (NVS via Preferences)
@@ -1236,13 +1292,16 @@ private:
     bool _otaRollbackPending = false;
     int _otaRollbackBootCount = 0;
     String _otaLastOkVersion;
-    bool _otaRollbackMarkedThisBoot = false;
+    uint32_t _otaPendingPartition = 0;
+    String _otaBootFirmwareID;
+    unsigned long _otaBootReportRetryMs = 0;
+    bool _otaRollbackMarkAttemptedThisBoot = false;
     bool _otaRollbackReportPublished = false;
     unsigned long _otaBootStartMs = 0;
     String _otaBootReportStatus;
     String _otaBootReportMessage;
-#if defined(ESP32)
-    Preferences _otaPrefs;
+#if defined(ESP_PLATFORM)
+    FngPrefs _otaPrefs;
 #endif
 
     AudioChunkCallbackFunction _audioChunkCallback;
@@ -1258,7 +1317,7 @@ private:
     // Set once an init frame has been parsed: without a provisioned URL the stream
     // waits for it instead of guessing the derived path.
     bool _deviceInitReceived = false;
-#if defined(ESP32)
+#if defined(ESP_PLATFORM)
     esp_websocket_client_handle_t _audioWs = nullptr;
     // Mono wire frames land here from the WebSocket task and leave from loop().
     // Enqueue is non-blocking: a full ring drops one frame so the WS task can still
@@ -1303,7 +1362,7 @@ private:
     void _dispatchAudioEntity(const FirmnginAudioEventMessage &message);
     void _notifyAudioEvent(FirmnginAudioEvent event, const char *detail, const char *entityKey = nullptr);
     String _resolveAudioStreamUrl() const;
-#if defined(ESP32)
+#if defined(ESP_PLATFORM)
     void _releaseAudioQueues();
     void _stopAudioWs();
     void _abortAudioClip();
@@ -1319,21 +1378,11 @@ private:
 #endif
 
     OTAAsyncState _otaAsyncState = OTA_ASYNC_IDLE;
-    HTTPClient _otaHttp;
-    int _otaContentLength = 0;
-    int _otaDownloaded = 0;
-    int _otaLastProgressBucket = -1;
-    int _otaLastPublishedProgressBucket = -1;
-    unsigned long _otaLastDebugAt = 0;
-    uint8_t *_otaBuffer = nullptr;
-#if defined(ESP32)
-    WiFiClientSecure _otaWifiClient;
-    mbedtls_md_context_t _otaSha256Ctx;
-#endif
+    FirmnginOtaTransfer *_otaTransfer = nullptr;
 
     bool otaHTTPGet(const char *path, const char *queryParams, String &responseBody);
 
-#if defined(ESP32)
+#if defined(ESP_PLATFORM)
     const char *_caCert = nullptr;
     const char *_clientCert = nullptr;
     const char *_privateKey = nullptr;
@@ -1370,8 +1419,19 @@ private:
     bool _deferredCallbacksLoaded = false;
     std::vector<StateRegEntry> _stateCallbacks;
 
+    void _applyIdentity(const FirmnginIdentityRecord &identity);
     void _Debug(String message, bool newLine = true);
     bool _networkReady() const;
+    // CloudLog sink + per-loop counters. _cloudLogTopic lives as long as the
+    // device does (built once in begin()); _cloudLogSent counts lines handed
+    // to MQTT this loop() pass for cheap loop-level observability.
+    bool _cloudLogSink(const char *line, unsigned long tsMs, void *user);
+    void _cloudLogDrain();
+    String _cloudLogTopic;
+    size_t _cloudLogSent = 0;
+    unsigned long _cloudLogLastAttemptMs = 0;
+    bool _linkForced = false;       // linkUp() override active
+    bool _linkForcedState = false;  // last linkUp() value
     bool _mqttIsConnected() const;
     bool _mqttIsStarted() const;
     bool _mqttPublish(const char *topic, const uint8_t *data, size_t len, bool retained);
@@ -1379,7 +1439,7 @@ private:
     void _drainMqttInbox();
     void _mqttAfterConnect();
     void _mqttShutdown();
-#if defined(ESP32)
+#if defined(ESP_PLATFORM)
     friend void firmnginMqttEvent(void *arg, esp_event_base_t base, int32_t event_id, void *event_data);
     void _onMqttEvent(esp_mqtt_event_handle_t event);
     void _subscribePlatform();
@@ -1388,7 +1448,7 @@ private:
     void _mqttRxReset(uint8_t which);
 #endif
     bool connectServer();
-    void mqttCallback(char *path, byte *payload, unsigned int length);
+    void mqttCallback(char *path, uint8_t *payload, unsigned int length);
     String getPathPayment(String deviceId);
     String getPathDispense(String deviceId);
     String getPathDeviceStatus(String deviceId);
@@ -1416,7 +1476,8 @@ private:
     void setupLWT();
     uint64_t getTimestampMillis(); // Returns Unix epoch milliseconds, or 0 until system time is valid
     bool publishPayload(const char *path, const char *payload, bool retained = false);
-    bool publishOTAStatus(const char *status, const char *message);
+    bool publishOTAStatus(const char *status, const char *message,
+                          const char *artifactId = nullptr, int progressOverride = -1);
     const char *_activeServiceCACert() const;
     int normalizeOTAProgress(const char *status, const char *message);
 
@@ -1434,7 +1495,10 @@ private:
     void _otaCleanup();
     void _otaRollbackSetup();
     void _otaRollbackLoop();
-    void _persistOtaRollbackState();
+    bool _persistOtaRollbackState();
+    bool _persistOtaBootReport();
+    bool _clearOtaBootReport();
+    int _otaRunningCandidatePartition() const;
     void runActiveSessionHandlers();
     void setMerchantStatus(const String &status);
     void setCurrentOrder(const String &orderId);

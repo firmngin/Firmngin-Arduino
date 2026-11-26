@@ -1,569 +1,284 @@
 #include "firmngin.h"
 #include "hmac.h"
-#include "ota_progress.h"
-
-#if defined(ESP32)
-#include <Update.h>
-#endif
+#include "http_response.h"
+#include "ota_manifest.h"
+#include "ota_transfer.h"
+#include <new>
 
 void Firmngin::setOTABaseURL(const char *baseURL)
 {
     _otaBaseUrl = baseURL != nullptr ? baseURL : "";
 }
 
-void Firmngin::setEnableOTA(bool enabled)
+void Firmngin::setOTAFirmwarePublicKey(const char *publicKeyPem)
 {
-    _otaEnabled = enabled;
+    _otaFirmwarePublicKey = publicKeyPem != nullptr ? publicKeyPem : "";
 }
 
-void Firmngin::enableOTA(bool enabled)
-{
-    setEnableOTA(enabled);
-}
+void Firmngin::setEnableOTA(bool enabled) { _otaEnabled = enabled; }
+void Firmngin::enableOTA(bool enabled) { setEnableOTA(enabled); }
 
 bool Firmngin::otaHTTPGet(const char *path, const char *queryParams, String &responseBody)
 {
-    String fullPath = String(path);
-    if (queryParams != nullptr && strlen(queryParams) > 0)
+    String fullPath = path;
+    if (queryParams != nullptr && queryParams[0] != '\0')
+        fullPath += String("?") + queryParams;
+    const String url = _otaBaseUrl + fullPath;
+    if (!fng_startsWith(url, "https://"))
     {
-        fullPath += "?";
-        fullPath += queryParams;
+        publishOTAStatus("failed", "OTA requires HTTPS");
+        return false;
     }
-
-    String url = _otaBaseUrl + fullPath;
-
-    unsigned long ts = time(nullptr);
-    String message = String(_deviceId) + "." + String(ts) + ".GET." + fullPath;
-    const char *activeServiceCA = _activeServiceCACert();
-
-#if defined(ESP32)
-    HTTPClient http;
-#if defined(ESP32)
-    WiFiClientSecure otaClient;
-    if (_insecure)
+    const char *ca = _activeServiceCACert();
+    const char *securityError = firmngin_http_security_error(_insecure, ca != nullptr,
+                                                            fng_http_insecure_supported());
+    if (securityError != nullptr)
     {
-        otaClient.setInsecure();
+        publishOTAStatus("failed", securityError);
+        return false;
     }
-    else
-    {
-        if (activeServiceCA == nullptr)
-        {
-            publishOTAStatus("failed", "Service CA certificate is not configured");
-            return false;
-        }
-        otaClient.setCACert(activeServiceCA);
-    }
-    if (_clientCert != nullptr)
-        otaClient.setCertificate(_clientCert);
-    if (_privateKey != nullptr)
-        otaClient.setPrivateKey(_privateKey);
-#endif
-    if (!http.begin(otaClient, url))
+    auto config = fng_http_config(url.c_str(), ca, _clientCert, _privateKey, _insecure);
+    config.disable_auto_redirect = true;
+    auto client = esp_http_client_init(&config);
+    if (!client)
     {
         publishOTAStatus("failed", "Manifest HTTP client initialization failed");
         return false;
     }
-    http.addHeader("X-Device-ID", String(_deviceId));
-    http.addHeader("X-Device-Timestamp", String(ts));
-    http.addHeader("X-Device-Signature", firmngin_hmac_sha256_hex(_deviceKey, message.c_str()));
-    http.addHeader("Accept", "application/json");
-
-    int httpCode = http.GET();
-    bool ok = (httpCode == HTTP_CODE_OK);
-    if (ok)
-        responseBody = http.getString();
-    else
+    const unsigned long timestamp = time(nullptr);
+    char ts[24];
+    snprintf(ts, sizeof(ts), "%lu", timestamp);
+    const String message = String(_deviceId) + "." + ts + ".GET." + fullPath;
+    const String signature = firmngin_hmac_sha256_hex(_deviceKey, message.c_str());
+    const bool opened =
+        esp_http_client_set_header(client, "X-Device-ID", _deviceId) == ESP_OK &&
+        esp_http_client_set_header(client, "X-Device-Timestamp", ts) == ESP_OK &&
+        esp_http_client_set_header(client, "X-Device-Signature", signature.c_str()) == ESP_OK &&
+        esp_http_client_set_header(client, "Accept", "application/json") == ESP_OK &&
+        esp_http_client_open(client, 0) == ESP_OK &&
+        esp_http_client_fetch_headers(client) >= 0 &&
+        esp_http_client_get_status_code(client) == 200;
+    bool ok = false;
+    if (opened)
     {
-        _Debug("OTA HTTP " + String(httpCode) + ": " + url);
-        _Debug("OTA HTTP error: " + http.errorToString(httpCode));
-        String errorMessage = "Manifest request failed (HTTP " + String(httpCode) + ")";
-        publishOTAStatus("failed", errorMessage.c_str());
+        ok = firmngin_read_http_body(
+            [client](char *data, size_t capacity) { return esp_http_client_read(client, data, capacity); },
+            [client]() { return esp_http_client_is_complete_data_received(client); },
+            responseBody, 2048) == FirmnginHttpBodyResult::Complete;
     }
-
-    http.end();
+    esp_http_client_cleanup(client);
+    if (!ok)
+        publishOTAStatus("failed", "Manifest request failed or response incomplete/too large");
     return ok;
-#else
-    (void)responseBody;
-    publishOTAStatus("failed", "OTA HTTPS is not supported on this platform");
-    return false;
-#endif
 }
 
 bool Firmngin::checkOTA()
 {
-    if (!_otaEnabled)
-        return publishOTAStatus("disabled", "OTA is not enabled");
-
-    if (_otaBaseUrl.length() == 0)
-        return publishOTAStatus("skipped", "OTA base URL is not configured");
-
-    publishOTAStatus("checking", "Requesting manifest");
-
-    char query[256];
-    int pos = 0;
-    if (_firmwareTargetBoard.length() > 0)
-    {
-        pos += snprintf(query + pos, sizeof(query) - pos,
-                        "target_board=%s&", _firmwareTargetBoard.c_str());
-    }
-    if (_firmwareTargetModel.length() > 0)
-    {
-        pos += snprintf(query + pos, sizeof(query) - pos,
-                        "target_model=%s&", _firmwareTargetModel.c_str());
-    }
-    pos += snprintf(query + pos, sizeof(query) - pos,
-                    "current_version=%s", _firmwareVersion.c_str());
-
-    String body;
-    if (!otaHTTPGet("/manifest", query, body))
+    // Explicit metadata checks are synchronous; performOTA never calls this from
+    // the loop. Its worker fetches a manifest when no cached artifact is present.
+    if (_otaTransfer != nullptr || !_otaEnabled)
         return false;
-
-    int idStart = body.indexOf("\"firmware_id\":\"");
-    int verStart = body.indexOf("\"version\":\"");
-    int shaStart = body.indexOf("\"sha256\":\"");
-
-    if (idStart < 0)
+    if (!firmngin_ota_public_key_valid(_otaFirmwarePublicKey))
     {
-        publishOTAStatus("uptodate", "No update available");
-        return true;
+        publishOTAStatus("failed", "OTA publisher verification key is missing or invalid");
+        return false;
     }
-
-    idStart += 15;
-    _otaFirmwareID = body.substring(idStart, body.indexOf("\"", idStart));
-    verStart += 11;
-    String newVer = body.substring(verStart, body.indexOf("\"", verStart));
-    shaStart += 10;
-    _otaFirmwareSHA256 = body.substring(shaStart, body.indexOf("\"", shaStart));
-    _otaFirmwareVersion = newVer;
-
-    char msg[128];
-    snprintf(msg, sizeof(msg), "Update available: %s", newVer.c_str());
-    publishOTAStatus("available", msg);
+    String path;
+    if (!firmngin_ota_manifest_path(_firmwareTargetBoard, _firmwareTargetModel, _firmwareVersion, path))
+    {
+        publishOTAStatus("failed", "OTA manifest query is too long");
+        return false;
+    }
+    publishOTAStatus("checking", "Requesting manifest");
+    String body;
+    if (!otaHTTPGet(path.c_str(), nullptr, body)) return false;
+    FirmnginOtaManifest manifest;
+    const auto result = firmngin_parse_ota_manifest(body, manifest);
+    _otaFirmwareID = manifest.id;
+    _otaFirmwareVersion = manifest.version;
+    _otaFirmwareSHA256 = manifest.sha256;
+    if (result == FirmnginOtaManifestResult::Invalid)
+    {
+        publishOTAStatus("failed", "Manifest fields are missing or invalid");
+        return false;
+    }
+    if (result == FirmnginOtaManifestResult::UpToDate)
+        publishOTAStatus("uptodate", "No update available");
+    else
+    {
+        const String message = String("Update available: ") + manifest.version;
+        publishOTAStatus("available", message.c_str());
+    }
     return true;
 }
 
 bool Firmngin::performOTA(const char *manifestUrl)
 {
     (void)manifestUrl;
-
-    if (_otaAsyncState != OTA_ASYNC_IDLE)
-        return publishOTAStatus("skipped", "OTA already in progress");
-
+    if (_otaTransfer != nullptr || !firmngin_ota_can_start(_otaAsyncState))
+        return false;
+    if (!_securityReady)
+    {
+        publishOTAStatus("failed", "Call begin() successfully before starting OTA");
+        return false;
+    }
     if (!_otaEnabled)
     {
-        _otaAsyncState = OTA_ASYNC_IDLE;
-        _otaFirmwareID = "";
-        return publishOTAStatus("disabled", "OTA is not enabled");
-    }
-
-    if (_otaFirmwareID.length() == 0)
-    {
-        if (!checkOTA())
-        {
-            _otaAsyncState = OTA_ASYNC_IDLE;
-            _otaFirmwareID = "";
-            return false;
-        }
-    }
-
-    if (_otaFirmwareID.length() == 0)
-    {
-        _otaAsyncState = OTA_ASYNC_IDLE;
-        _otaFirmwareID = "";
-        return publishOTAStatus("skipped", "No firmware available");
-    }
-
-    publishOTAStatus("downloading", "Starting firmware download");
-
-    String downloadPath = String("/firmware/") + _otaFirmwareID + "/download";
-
-#if defined(ESP32)
-    String url = _otaBaseUrl + downloadPath;
-    const char *activeServiceCA = _activeServiceCACert();
-#if defined(ESP32)
-    if (_insecure)
-    {
-        _otaWifiClient.setInsecure();
-    }
-    else
-    {
-        if (activeServiceCA == nullptr)
-        {
-            _otaAsyncState = OTA_ASYNC_IDLE;
-            publishOTAStatus("failed", "Service CA certificate is not configured");
-            _otaFirmwareID = "";
-            return false;
-        }
-        _otaWifiClient.setCACert(activeServiceCA);
-    }
-    if (_clientCert != nullptr)
-        _otaWifiClient.setCertificate(_clientCert);
-    if (_privateKey != nullptr)
-        _otaWifiClient.setPrivateKey(_privateKey);
-#endif
-    if (!_otaHttp.begin(_otaWifiClient, url))
-    {
-        _otaAsyncState = OTA_ASYNC_IDLE;
-        publishOTAStatus("failed", "Firmware HTTP client initialization failed");
-        _otaFirmwareID = "";
+        publishOTAStatus("disabled", "OTA is not enabled");
         return false;
     }
-
-    unsigned long ts = time(nullptr);
-    String message = String(_deviceId) + "." + String(ts) + ".GET." + downloadPath;
-    _otaHttp.addHeader("X-Device-ID", String(_deviceId));
-    _otaHttp.addHeader("X-Device-Timestamp", String(ts));
-    _otaHttp.addHeader("X-Device-Signature", firmngin_hmac_sha256_hex(_deviceKey, message.c_str()));
-
-    int httpCode = _otaHttp.GET();
-    if (httpCode != HTTP_CODE_OK)
+    const char *failure = nullptr;
+    const char *ca = _activeServiceCACert();
+    if (!fng_startsWith(_otaBaseUrl, "https://")) failure = "OTA requires HTTPS";
+    else if (!firmngin_ota_public_key_valid(_otaFirmwarePublicKey))
+        failure = "OTA publisher verification key is missing or invalid";
+    else if (_otaRollbackPending) failure = "Previous OTA boot confirmation is still pending";
+    else failure = firmngin_http_security_error(_insecure, ca != nullptr, fng_http_insecure_supported());
+    if (failure != nullptr)
     {
-        _Debug("OTA download HTTP " + String(httpCode));
-        _Debug("OTA download error: " + _otaHttp.errorToString(httpCode));
-        _otaHttp.end();
-        _otaAsyncState = OTA_ASYNC_IDLE;
-        publishOTAStatus("failed", "Firmware download failed");
-        _otaFirmwareID = "";
+        publishOTAStatus("failed", failure);
         return false;
     }
-
-    _otaContentLength = _otaHttp.getSize();
-    if (_debug)
+    if (!_clearOtaBootReport())
     {
-        Serial.print("OTA download started (async). Size: ");
-        Serial.print(_otaContentLength >= 0 ? String(_otaContentLength / 1024) : String("unknown"));
-        if (_otaContentLength >= 0)
-            Serial.println(" KB");
-        else
-            Serial.println();
-    }
-
-    _otaBuffer = (uint8_t *)malloc(FIRMWARE_BUFFER_SIZE);
-    if (_otaBuffer == nullptr)
-    {
-        _otaHttp.end();
-        _otaAsyncState = OTA_ASYNC_IDLE;
-        publishOTAStatus("failed", "Firmware buffer allocation failed");
-        _otaFirmwareID = "";
+        publishOTAStatus("failed", "Previous OTA boot report could not be cleared");
         return false;
     }
-    _otaDownloaded = 0;
-    _otaLastProgressBucket = -1;
-    _otaLastPublishedProgressBucket = -1;
-    _otaLastDebugAt = 0;
-
-#if defined(ESP32)
-    mbedtls_md_init(&_otaSha256Ctx);
-    mbedtls_md_setup(&_otaSha256Ctx, mbedtls_md_info_from_type(MBEDTLS_MD_SHA256), 0);
-    mbedtls_md_starts(&_otaSha256Ctx);
-#endif
-
-    if (_otaContentLength > 0 && !Update.begin(_otaContentLength))
+    FirmnginOtaRequest request;
+    request.baseUrl = _otaBaseUrl;
+    request.deviceId = _deviceId;
+    request.deviceKey = _deviceKey;
+    request.ca = ca != nullptr ? ca : "";
+    request.clientCert = _clientCert != nullptr ? _clientCert : "";
+    request.privateKey = _privateKey != nullptr ? _privateKey : "";
+    request.publisherKey = _otaFirmwarePublicKey;
+    request.board = _firmwareTargetBoard;
+    request.model = _firmwareTargetModel;
+    request.currentVersion = _firmwareVersion;
+    request.firmware.id = _otaFirmwareID;
+    request.firmware.version = _otaFirmwareVersion;
+    request.firmware.sha256 = _otaFirmwareSHA256;
+    request.insecure = _insecure;
+    request.clientAuth = _clientCert != nullptr || _privateKey != nullptr;
+    _otaTransfer = new (std::nothrow) FirmnginOtaTransfer(request);
+    if (!_otaTransfer || !_otaTransfer->start())
     {
-        if (_debug)
-            Serial.println("OTA Update.begin() failed: " + String(Update.getError()));
         _otaCleanup();
-        publishOTAStatus("failed", "Update.begin() failed");
-        _otaFirmwareID = "";
+        publishOTAStatus("failed", "OTA worker allocation failed");
         return false;
     }
-
     _otaAsyncState = OTA_ASYNC_DOWNLOADING;
-    return true;
-#else
-    _otaAsyncState = OTA_ASYNC_IDLE;
-    _otaFirmwareID = "";
-    return publishOTAStatus("skipped", "Platform not supported for HTTP OTA");
-#endif
+    return true; // Accepted: all network and flash I/O now belongs to the worker.
 }
 
 void Firmngin::_processOTA()
 {
-    if (_otaAsyncState == OTA_ASYNC_IDLE || _otaAsyncState == OTA_ASYNC_FAILED)
-        return;
-
-    if (_otaAsyncState == OTA_ASYNC_DOWNLOADING)
+    if (!_otaTransfer) return;
+    FirmnginOtaEvent event;
+    for (int i = 0; i < 8 && _otaTransfer->poll(event); ++i)
     {
-        WiFiClient *stream = _otaHttp.getStreamPtr();
-        if (stream == nullptr)
+        if (event.kind == FirmnginOtaEvent::Status)
         {
-            _otaCleanup();
-            publishOTAStatus("failed", "HTTP stream lost");
+            _otaAsyncState = event.state;
+            _otaFirmwareID = event.firmwareId;
+            publishOTAStatus(event.status, event.message, event.firmwareId, event.progress);
+            continue;
+        }
+        // A terminal event is emitted only after all transfer I/O has unwound.
+        delete _otaTransfer;
+        _otaTransfer = nullptr;
+        if (event.kind == FirmnginOtaEvent::Failed || event.kind == FirmnginOtaEvent::UpToDate)
+        {
+            _otaAsyncState = event.kind == FirmnginOtaEvent::Failed ? OTA_ASYNC_FAILED : OTA_ASYNC_IDLE;
             _otaFirmwareID = "";
-            return;
+            publishOTAStatus(event.status, event.message, event.firmwareId);
+            return; // A callback may start a new transfer; do not touch it here.
         }
-
-        size_t available = stream->available();
-        if (available == 0)
-        {
-            if (!_otaHttp.connected())
-                _otaAsyncState = OTA_ASYNC_VERIFYING;
-            return;
-        }
-
-        int toRead = min((int)available, FIRMWARE_BUFFER_SIZE);
-        int readLen = stream->readBytes(_otaBuffer, toRead);
-        if (readLen <= 0)
-        {
-            if (!_otaHttp.connected())
-                _otaAsyncState = OTA_ASYNC_VERIFYING;
-            return;
-        }
-
-        _otaDownloaded += readLen;
-
-        yield();
-
-#if defined(ESP32)
-        mbedtls_md_update(&_otaSha256Ctx, _otaBuffer, readLen);
-#endif
-
-        if (_otaContentLength > 0)
-        {
-            size_t written = Update.write(_otaBuffer, readLen);
-            if (written != (size_t)readLen)
-            {
-                if (_debug)
-                    Serial.println("OTA Update.write() failed: " + String(Update.getError()));
-#if defined(ESP32)
-                Update.abort();
-#endif
-                _otaCleanup();
-                publishOTAStatus("failed", "Firmware write failed");
-                _otaFirmwareID = "";
-                return;
-            }
-
-            int progress = (_otaDownloaded * 100) / _otaContentLength;
-            int progressBucket = progress / 10;
-
-            if (progressBucket != _otaLastPublishedProgressBucket || progress == 100)
-            {
-                _otaLastPublishedProgressBucket = progressBucket;
-                char progressValue[8];
-                snprintf(progressValue, sizeof(progressValue), "%d", progress);
-                char progressPayload[160];
-                firmngin_json::ArrayBuilder b(progressPayload, sizeof(progressPayload));
-                b.reset();
-                b.add("ots", "downloading");
-                b.add("otp", progressValue);
-                if (_otaFirmwareID.length() > 0)
-                    b.add("ofd", _otaFirmwareID.c_str());
-                updateEntities(b.build());
-            }
-
-            if (_debug)
-            {
-                if (progressBucket != _otaLastProgressBucket || progress == 100)
-                {
-                    _otaLastProgressBucket = progressBucket;
-                    Serial.print("OTA download progress: ");
-                    Serial.print(progress);
-                    Serial.print("% (");
-                    Serial.print(_otaDownloaded / 1024);
-                    Serial.print("/");
-                    Serial.print(_otaContentLength / 1024);
-                    Serial.println(" KB)");
-                }
-            }
-        }
-        else if (_debug && millis() - _otaLastDebugAt > 1000)
-        {
-            _otaLastDebugAt = millis();
-            Serial.print("OTA download received: ");
-            Serial.print(_otaDownloaded / 1024);
-            Serial.println(" KB");
-        }
-        else if (millis() - _otaLastDebugAt > 1000)
-        {
-            _otaLastDebugAt = millis();
-            int estimated = _otaDownloaded / 32;
-            if (estimated < 0)
-                estimated = 0;
-            if (estimated > 99)
-                estimated = 99;
-            char progressValue[8];
-            snprintf(progressValue, sizeof(progressValue), "%d", estimated);
-            char progressPayload[160];
-            firmngin_json::ArrayBuilder b(progressPayload, sizeof(progressPayload));
-            b.reset();
-            b.add("ots", "downloading");
-            b.add("otp", progressValue);
-            if (_otaFirmwareID.length() > 0)
-                b.add("ofd", _otaFirmwareID.c_str());
-            updateEntities(b.build());
-
-            if (_debug)
-            {
-                Serial.print("OTA download received: ");
-                Serial.print(_otaDownloaded / 1024);
-                Serial.println(" KB");
-            }
-        }
-
-        if (_otaContentLength > 0 && _otaDownloaded >= _otaContentLength)
-        {
-            _otaAsyncState = OTA_ASYNC_VERIFYING;
-        }
-        else
-        {
-            if (_otaHttp.connected() || _otaContentLength < 0 || _otaDownloaded < _otaContentLength)
-                return;
-
-            _otaAsyncState = OTA_ASYNC_VERIFYING;
-        }
-    }
-
-    if (_otaAsyncState == OTA_ASYNC_VERIFYING)
-    {
-        _otaHttp.end();
-
-        if (_otaContentLength > 0 && _otaDownloaded != _otaContentLength)
-        {
-#if defined(ESP32)
-            Update.abort();
-#endif
-            _otaCleanup();
-            publishOTAStatus("failed", "Firmware download incomplete");
-            _otaFirmwareID = "";
-            return;
-        }
-
-#if defined(ESP32)
-        uint8_t computedHash[32];
-        mbedtls_md_finish(&_otaSha256Ctx, computedHash);
-        mbedtls_md_free(&_otaSha256Ctx);
-#endif
-
-#if defined(ESP32)
-        char computedHex[65];
-        for (int i = 0; i < 32; i++)
-            sprintf(computedHex + (i * 2), "%02x", computedHash[i]);
-        computedHex[64] = '\0';
-
-        if (_otaFirmwareSHA256.length() > 0 && _otaFirmwareSHA256 != computedHex)
-        {
-            if (_debug)
-            {
-                Serial.print("OTA SHA256 mismatch: expected ");
-                Serial.print(_otaFirmwareSHA256);
-                Serial.print(", got ");
-                Serial.println(computedHex);
-            }
-#if defined(ESP32)
-            Update.abort();
-#endif
-            _otaCleanup();
-            publishOTAStatus("failed", "SHA256 mismatch");
-            _otaFirmwareID = "";
-            return;
-        }
-
-        if (_debug)
-        {
-            Serial.print("OTA SHA256 verified OK: ");
-            Serial.println(computedHex);
-        }
-#endif
-        publishOTAStatus("installing", "Installing firmware");
         _otaAsyncState = OTA_ASYNC_INSTALLING;
-    }
-
-    if (_otaAsyncState == OTA_ASYNC_INSTALLING)
-    {
-        if (_debug)
+        _otaFirmwareID = event.firmwareId;
+        const esp_partition_t *candidatePartition = event.partition;
+        if (!candidatePartition)
         {
-            Serial.print("OTA download completed: ");
-            Serial.print(_otaDownloaded / 1024);
-            Serial.println(" KB");
-        }
-
-        if (!Update.end())
-        {
-            if (_debug)
-                Serial.println("OTA Update.end() failed: " + String(Update.getError()));
             _otaCleanup();
-            publishOTAStatus("failed", "Update.end() failed");
+            publishOTAStatus("failed", "OTA target partition is unavailable");
             _otaFirmwareID = "";
             return;
         }
-
-        // New firmware will boot as pending verification: enable boot-rollback tracking.
+        publishOTAStatus("installing", "Installing verified firmware");
+        const bool previousRollbackPending = _otaRollbackPending;
+        const int previousRollbackBootCount = _otaRollbackBootCount;
+        const uint32_t previousPendingPartition = _otaPendingPartition;
+        const String previousBootFirmwareID = _otaBootFirmwareID;
+        _otaPendingPartition = candidatePartition->address;
+        _otaBootFirmwareID = _otaFirmwareID;
         _otaRollbackPending = true;
         _otaRollbackBootCount = 0;
-        _persistOtaRollbackState();
-
-        publishOTAStatus("installing", "Finalizing firmware install");
+        // The worker never selects boot. Persist the rollback intent first.
+        if (!_persistOtaRollbackState())
+        {
+            _otaRollbackPending = previousRollbackPending;
+            _otaRollbackBootCount = previousRollbackBootCount;
+            _otaPendingPartition = previousPendingPartition;
+            _otaBootFirmwareID = previousBootFirmwareID;
+            _otaCleanup();
+            publishOTAStatus("failed", "Rollback state could not be saved");
+            _otaFirmwareID = "";
+            return;
+        }
+        if (esp_ota_set_boot_partition(candidatePartition) != ESP_OK)
+        {
+            _otaRollbackPending = previousRollbackPending;
+            _otaRollbackBootCount = previousRollbackBootCount;
+            _otaPendingPartition = previousPendingPartition;
+            _otaBootFirmwareID = previousBootFirmwareID;
+            if (!_persistOtaRollbackState())
+                _Debug("OTA rollback: failed to restore state after boot partition error");
+            _otaCleanup();
+            publishOTAStatus("failed", "OTA target partition is unavailable");
+            _otaFirmwareID = "";
+            return;
+        }
         publishOTAStatus("installed", "Firmware installed");
         publishOTAStatus("rebooting", "Rebooting device");
         _otaFirmwareID = "";
-
-        free(_otaBuffer);
-        _otaBuffer = nullptr;
-        _otaAsyncState = OTA_ASYNC_IDLE;
-
-        if (_debug)
-            Serial.println("OTA installed successfully, rebooting...");
-        delay(500);
-        ESP.restart();
+        fng_delay_ms(500);
+        fng_restart();
+        return;
     }
 }
 
 void Firmngin::_otaCleanup()
 {
+    delete _otaTransfer;
+    _otaTransfer = nullptr;
     _otaAsyncState = OTA_ASYNC_FAILED;
-    _otaHttp.end();
-    if (_otaBuffer != nullptr)
-    {
-        free(_otaBuffer);
-        _otaBuffer = nullptr;
-    }
-#if defined(ESP32)
-    mbedtls_md_free(&_otaSha256Ctx);
-#endif
-    _otaDownloaded = 0;
-    _otaContentLength = 0;
 }
 
-void Firmngin::onOTAStatus(OTACallbackFunction callback)
-{
-    _otaCallback = callback;
-}
-
+void Firmngin::onOTAStatus(OTACallbackFunction callback) { _otaCallback = callback; }
 int Firmngin::normalizeOTAProgress(const char *status, const char *message)
 {
     return firmngin_normalize_ota_progress(status, message);
 }
 
-bool Firmngin::publishOTAStatus(const char *status, const char *message)
+bool Firmngin::publishOTAStatus(const char *status, const char *message,
+                                const char *artifactId, int progressOverride)
 {
-    if (_debug)
-    {
-        Serial.print("OTA status: ");
-        Serial.print(status);
-        Serial.print(" - ");
-        Serial.println(message);
-    }
-
-    if (_otaCallback)
-        _otaCallback(status, message);
+    // Snapshot before calling application code: callbacks may start another OTA.
+    const String firmwareId = artifactId != nullptr ? artifactId : _otaFirmwareID;
+    if (_debug) _Debug(String("OTA status: ") + status + " - " + message);
+    if (_otaCallback) _otaCallback(status, message);
     for (const auto &callback : _otaCallbacks)
-    {
-        if (callback)
-        {
-            callback(status, message);
-        }
-    }
-
-    char buf[512];
-    firmngin_json::ArrayBuilder b(buf, sizeof(buf));
-    b.reset();
-    b.add("ots", status);
-    char progressValue[8];
-    snprintf(progressValue, sizeof(progressValue), "%d", normalizeOTAProgress(status, message));
-    b.add("otp", progressValue);
-    if (_otaFirmwareID.length() > 0)
-        b.add("ofd", _otaFirmwareID.c_str());
-
-    return updateEntities(b.build());
+        if (callback) callback(status, message);
+    char buffer[512], progress[8], detail[128];
+    firmngin_json::ArrayBuilder builder(buffer, sizeof(buffer));
+    builder.reset();
+    builder.add("ots", status);
+    const int percent = progressOverride >= 0 ? progressOverride :
+        (status && strcmp(status, "downloading") == 0 ? 0 : normalizeOTAProgress(status, message));
+    snprintf(progress, sizeof(progress), "%d", percent);
+    builder.add("otp", progress);
+    if (firmwareId.length()) builder.add("ofd", firmwareId.c_str());
+    snprintf(detail, sizeof(detail), "%s", message != nullptr ? message : "");
+    builder.add("ota_message", detail);
+    return updateEntities(builder.build());
 }

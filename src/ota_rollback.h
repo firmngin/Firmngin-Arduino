@@ -32,8 +32,19 @@ struct OtaRollbackResult
 
 // Decides the rollback action for the current boot. runningVersion == nullptr is
 // treated as "". uptimeMs is the time since boot (0 on the very first check).
+// candidatePartition: 1 = running the saved target partition, 0 = another
+// partition, -1 = legacy state without partition identity (version fallback).
 OtaRollbackResult firmngin_ota_rollback_decide(const char *runningVersion,
                                                const OtaRollbackState &state,
-                                               unsigned long uptimeMs);
+                                               unsigned long uptimeMs,
+                                               int candidatePartition = -1);
+
+// Arduino Preferences::remove returns false for an absent key.
+template <typename Store>
+bool firmngin_clear_ota_boot_report(Store &store)
+{
+    return (!store.isKey("boot_report") || store.remove("boot_report")) &&
+           (!store.isKey("boot_message") || store.remove("boot_message"));
+}
 
 #endif // FIRMNGIN_OTA_ROLLBACK_H

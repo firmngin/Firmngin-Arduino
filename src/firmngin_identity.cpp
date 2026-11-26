@@ -1,7 +1,11 @@
 #include "firmngin_identity.h"
+#include "fng_fs.h"
+#include "identity_meta.h"
 
-#if defined(ESP32)
-#include <LittleFS.h>
+#if defined(ESP_PLATFORM)
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <cstdio>
 #endif
 
 namespace
@@ -42,128 +46,29 @@ namespace
     static const char *LEGACY_CA_CERT_PATH = "/firmngin/ca.pem";
     static const char *LEGACY_SERVICE_CA_CERT_PATH = "/firmngin/service_ca.pem";
 
-    String trimLine(const String &line)
+    bool isDirectory(const char *path)
     {
-        String out = line;
-        out.trim();
-        return out;
-    }
-
-    bool isCertificatePEM(const String &content)
-    {
-        return content.indexOf("-----BEGIN CERTIFICATE-----") >= 0 &&
-               content.indexOf("-----END CERTIFICATE-----") >= 0;
-    }
-
-    bool isPrivateKeyPEM(const String &content)
-    {
-        return (content.indexOf("-----BEGIN PRIVATE KEY-----") >= 0 &&
-                content.indexOf("-----END PRIVATE KEY-----") >= 0) ||
-               (content.indexOf("-----BEGIN RSA PRIVATE KEY-----") >= 0 &&
-                content.indexOf("-----END RSA PRIVATE KEY-----") >= 0) ||
-               (content.indexOf("-----BEGIN EC PRIVATE KEY-----") >= 0 &&
-                content.indexOf("-----END EC PRIVATE KEY-----") >= 0);
-    }
-
-    bool isHexValue(const String &value, size_t requiredLength)
-    {
-        if (value.length() != requiredLength)
-            return false;
-        for (unsigned int i = 0; i < value.length(); i++)
-        {
-            const char c = value[i];
-            if (!((c >= '0' && c <= '9') ||
-                  (c >= 'a' && c <= 'f') ||
-                  (c >= 'A' && c <= 'F')))
-                return false;
-        }
-        return true;
-    }
-
-    bool splitMetaLine(const String &line, String &key, String &value)
-    {
-        int idx = line.indexOf('=');
-        if (idx <= 0)
-            return false;
-        key = line.substring(0, idx);
-        value = line.substring(idx + 1);
-        key.trim();
-        value.trim();
-        return key.length() > 0;
-    }
-
-    bool isValidHttpsBaseUrl(const String &value)
-    {
-        if (!value.startsWith("https://") || value.length() <= 8 || value.endsWith("/"))
-            return false;
-
-        int authorityEnd = value.indexOf('/', 8);
-        String authority = authorityEnd >= 0 ? value.substring(8, authorityEnd) : value.substring(8);
-        if (authority.length() == 0 || authority.indexOf('@') >= 0)
-            return false;
-
-        for (unsigned int i = 0; i < value.length(); i++)
-        {
-            const char c = value[i];
-            if (c <= ' ' || c == '?' || c == '#')
-                return false;
-        }
-        return true;
-    }
-
-    bool isValidStreamEndpoint(const String &value)
-    {
-        const bool secure = value.startsWith("wss://") || value.startsWith("https://");
-        const bool plain = value.startsWith("ws://") || value.startsWith("http://");
-        if (!secure && !plain)
-            return false;
-
-        const int schemeEnd = value.indexOf("://");
-        const unsigned int authorityStart = static_cast<unsigned int>(schemeEnd + 3);
-        if (value.length() <= authorityStart)
-            return false;
-
-        for (unsigned int i = 0; i < value.length(); i++)
-        {
-            const char c = value[i];
-            if (c <= ' ' || c == '?' || c == '#')
-                return false;
-        }
-
-        const int pathStart = value.indexOf('/', authorityStart);
-        const String authority = pathStart >= 0
-                                     ? value.substring(authorityStart, pathStart)
-                                     : value.substring(authorityStart);
-        return authority.length() > 0 && authority.indexOf('@') < 0;
-    }
-
-    bool findMetaValue(const String &meta, const char *wantedKey, String &out)
-    {
-        int start = 0;
-        while (start < static_cast<int>(meta.length()))
-        {
-            int end = meta.indexOf('\n', start);
-            if (end < 0)
-                end = meta.length();
-
-            String line = trimLine(meta.substring(start, end));
-            String key;
-            String value;
-            if (splitMetaLine(line, key, value) && key == wantedKey)
-            {
-                out = value;
-                return true;
-            }
-            start = end + 1;
-        }
-        out = "";
+#if defined(ESP_PLATFORM)
+        struct stat st = {};
+        return stat(fng_fs_path(path).c_str(), &st) == 0 && S_ISDIR(st.st_mode);
+#else
+        (void)path;
         return false;
+#endif
     }
+
+
+
+
+
+
+
+
 
     bool mountFS()
     {
-#if defined(ESP32)
-        return LittleFS.begin(true);
+#if defined(ESP_PLATFORM)
+        return fng_fs_mount();
 #else
         return false;
 #endif
@@ -171,17 +76,28 @@ namespace
 
     void unmountFS()
     {
-#if defined(ESP32)
-        LittleFS.end();
+#if defined(ESP_PLATFORM)
+        fng_fs_unmount();
+#endif
+    }
+
+    bool fileExists(const char *path)
+    {
+#if defined(ESP_PLATFORM)
+        struct stat st = {};
+        return stat(fng_fs_path(path).c_str(), &st) == 0;
+#else
+        (void)path;
+        return false;
 #endif
     }
 
     bool ensureIdentityDirectory()
     {
-#if defined(ESP32)
-        if (LittleFS.exists(IDENTITY_DIR))
+#if defined(ESP_PLATFORM)
+        if (isDirectory(IDENTITY_DIR))
             return true;
-        return LittleFS.mkdir(IDENTITY_DIR);
+        return mkdir(fng_fs_path(IDENTITY_DIR).c_str(), 0775) == 0 || isDirectory(IDENTITY_DIR);
 #else
         return false;
 #endif
@@ -189,35 +105,62 @@ namespace
 
     bool readTextFile(const char *path, String &out)
     {
-        if (!LittleFS.exists(path))
+#if defined(ESP_PLATFORM)
+        if (!fileExists(path))
         {
             out = "";
             return false;
         }
-        File file = LittleFS.open(path, "r");
-        if (!file)
+        FILE *file = fopen(fng_fs_path(path).c_str(), "r");
+        if (file == nullptr)
             return false;
-        out = file.readString();
-        file.close();
+        out = "";
+        char buf[512];
+        size_t read = 0;
+        while ((read = fread(buf, 1, sizeof(buf), file)) > 0)
+        {
+            // Cap identity files: PEM bundles are a few KB; a flash-corrupted
+            // giant file must not churn the heap on a 320 KB device.
+            if (out.length() > 16384)
+            {
+                fclose(file);
+                return false;
+            }
+            fng_append(out, buf, read);
+        }
+        fclose(file);
         return out.length() > 0;
+#else
+        (void)path;
+        (void)out;
+        return false;
+#endif
     }
 
     bool writeTextFile(const char *path, const String &content)
     {
+#if defined(ESP_PLATFORM)
         if (!ensureIdentityDirectory())
             return false;
-        File file = LittleFS.open(path, "w");
-        if (!file)
+        FILE *file = fopen(fng_fs_path(path).c_str(), "w");
+        if (file == nullptr)
             return false;
-        size_t written = file.print(content);
-        file.close();
+        const size_t written = content.length() == 0 ? 0u : fwrite(content.c_str(), 1, content.length(), file);
+        fclose(file);
         return written == content.length();
+#else
+        (void)path;
+        (void)content;
+        return false;
+#endif
     }
 
     void removeFile(const char *path)
     {
-        if (LittleFS.exists(path))
-            LittleFS.remove(path);
+#if defined(ESP_PLATFORM)
+        if (fileExists(path))
+            remove(fng_fs_path(path).c_str());
+#endif
     }
 
     void removePathSet(const IdentityPaths &paths)
@@ -231,95 +174,19 @@ namespace
 
     bool renameFile(const char *from, const char *to)
     {
-        if (!LittleFS.exists(from))
+#if defined(ESP_PLATFORM)
+        if (!fileExists(from))
             return true;
         removeFile(to);
-        return LittleFS.rename(from, to);
+        return rename(fng_fs_path(from).c_str(), fng_fs_path(to).c_str()) == 0;
+#else
+        (void)from;
+        (void)to;
+        return false;
+#endif
     }
 
-    bool parseMeta(const String &meta, FirmnginIdentityRecord &out)
-    {
-        bool invalidServiceEndpoint = false;
-        int start = 0;
-        while (start < static_cast<int>(meta.length()))
-        {
-            int end = meta.indexOf('\n', start);
-            if (end < 0)
-                end = meta.length();
 
-            String line = trimLine(meta.substring(start, end));
-            String key;
-            String value;
-            if (splitMetaLine(line, key, value))
-            {
-                if (key == "device_id")
-                    out.deviceId = value;
-                else if (key == "device_key")
-                    out.deviceKey = value;
-                else if (key == "decryptor")
-                    out.decryptor = value;
-                else if (key == "tls")
-                    out.tlsMode = value;
-                else if (key == "fingerprint")
-                    out.fingerprintHex = value;
-                else if (key == "broker")
-                    out.brokerAddr = value;
-                else if (key == "broker_port")
-                    out.brokerPort = value.toInt();
-                else if (key == "api_base_url")
-                {
-                    if (isValidHttpsBaseUrl(value))
-                        out.apiBaseUrl = value;
-                    else
-                        invalidServiceEndpoint = true;
-                }
-                else if (key == "ota_base_url")
-                {
-                    if (isValidHttpsBaseUrl(value))
-                        out.otaBaseUrl = value;
-                    else
-                        invalidServiceEndpoint = true;
-                }
-                else if (key == "audio_stream_url")
-                {
-                    if (isValidStreamEndpoint(value))
-                        out.audioStreamUrl = value;
-                    else
-                        invalidServiceEndpoint = true;
-                }
-                else if (key == "audio_stream_token")
-                {
-                    if (value.length() > 0)
-                        out.audioStreamToken = value;
-                }
-            }
-            start = end + 1;
-        }
-        return !invalidServiceEndpoint;
-    }
-
-    bool validateIdentityRecord(const FirmnginIdentityRecord &record)
-    {
-        if (record.deviceId.length() == 0 || record.deviceKey.length() == 0)
-            return false;
-        if (!isHexValue(record.decryptor, 32) && !isHexValue(record.decryptor, 64))
-            return false;
-        if (record.tlsMode != "ca" && record.tlsMode != "fingerprint")
-            return false;
-        if (!isValidHttpsBaseUrl(record.apiBaseUrl) || !isValidHttpsBaseUrl(record.otaBaseUrl))
-            return false;
-        if (record.audioStreamUrl.length() > 0 && !isValidStreamEndpoint(record.audioStreamUrl))
-            return false;
-        if (!isCertificatePEM(record.clientCert) || !isPrivateKeyPEM(record.privateKey))
-            return false;
-        if (!isCertificatePEM(record.serviceCaCert))
-            return false;
-        if (record.tlsMode == "ca" && !isCertificatePEM(record.caCert))
-            return false;
-        if (record.tlsMode == "fingerprint" && !isHexValue(record.fingerprintHex, 40))
-            return false;
-        return true;
-    }
 
     bool loadRecord(const IdentityPaths &paths, FirmnginIdentityRecord &out)
     {
@@ -336,16 +203,16 @@ namespace
 
     bool anyPathExists(const IdentityPaths &paths)
     {
-        return LittleFS.exists(paths.meta) ||
-               LittleFS.exists(paths.clientCert) ||
-               LittleFS.exists(paths.privateKey) ||
-               LittleFS.exists(paths.caCert) ||
-               LittleFS.exists(paths.serviceCaCert);
+        return fileExists(paths.meta) ||
+               fileExists(paths.clientCert) ||
+               fileExists(paths.privateKey) ||
+               fileExists(paths.caCert) ||
+               fileExists(paths.serviceCaCert);
     }
 
     bool restoreBackupFile(const char *backupPath, const char *activePath)
     {
-        if (!LittleFS.exists(backupPath))
+        if (!fileExists(backupPath))
             return true;
         String content;
         return readTextFile(backupPath, content) && writeTextFile(activePath, content);
@@ -366,7 +233,7 @@ namespace
 
     void recoverInterruptedCommit()
     {
-        if (!LittleFS.exists(COMMIT_MARKER_PATH))
+        if (!fileExists(COMMIT_MARKER_PATH))
             return;
 
         FirmnginIdentityRecord active;
@@ -377,7 +244,7 @@ namespace
         else
         {
             const bool hasBackup = anyPathExists(BACKUP_PATHS);
-            const bool backupWasComplete = LittleFS.exists(BACKUP_PATHS.meta) || !hasBackup;
+            const bool backupWasComplete = fileExists(BACKUP_PATHS.meta) || !hasBackup;
             if (!restoreBackupIdentity(backupWasComplete))
                 return;
             removePathSet(BACKUP_PATHS);
@@ -436,19 +303,19 @@ namespace
 
     void removeIdentityFiles(const char *metaPath, const char *clientPath, const char *privatePath, const char *caPath, const char *serviceCaPath)
     {
-        if (LittleFS.exists(metaPath))
-            LittleFS.remove(metaPath);
-        if (LittleFS.exists(clientPath))
-            LittleFS.remove(clientPath);
-        if (LittleFS.exists(privatePath))
-            LittleFS.remove(privatePath);
-        if (LittleFS.exists(caPath))
-            LittleFS.remove(caPath);
-        if (LittleFS.exists(serviceCaPath))
-            LittleFS.remove(serviceCaPath);
+        if (fileExists(metaPath))
+            removeFile(metaPath);
+        if (fileExists(clientPath))
+            removeFile(clientPath);
+        if (fileExists(privatePath))
+            removeFile(privatePath);
+        if (fileExists(caPath))
+            removeFile(caPath);
+        if (fileExists(serviceCaPath))
+            removeFile(serviceCaPath);
     }
 
-#if defined(FIRMNGIN_FACTORY_SERIAL) && (FIRMNGIN_FACTORY_SERIAL != 0)
+#if defined(ARDUINO) && defined(FIRMNGIN_FACTORY_SERIAL) && (FIRMNGIN_FACTORY_SERIAL != 0)
     String gMetaBuffer;
     String gPendingCertKind;
     String gPendingCertBody;
@@ -465,7 +332,7 @@ namespace FirmnginIdentity
 
     bool load(FirmnginIdentityRecord &out)
     {
-#if !defined(ESP32)
+#if !defined(ESP_PLATFORM)
         (void)out;
         return false;
 #else
@@ -480,7 +347,7 @@ namespace FirmnginIdentity
 
     bool save(const FirmnginIdentityRecord &record)
     {
-#if !defined(ESP32)
+#if !defined(ESP_PLATFORM)
         (void)record;
         return false;
 #else
@@ -525,7 +392,7 @@ namespace FirmnginIdentity
 
     bool clear()
     {
-#if !defined(ESP32)
+#if !defined(ESP_PLATFORM)
         return false;
 #else
         if (!mountFS())
@@ -539,12 +406,12 @@ namespace FirmnginIdentity
             !anyPathExists(ACTIVE_PATHS) &&
             !anyPathExists(STAGED_PATHS) &&
             !anyPathExists(BACKUP_PATHS) &&
-            !LittleFS.exists(COMMIT_MARKER_PATH) &&
-            !LittleFS.exists(LEGACY_META_PATH) &&
-            !LittleFS.exists(LEGACY_CLIENT_CERT_PATH) &&
-            !LittleFS.exists(LEGACY_PRIVATE_KEY_PATH) &&
-            !LittleFS.exists(LEGACY_CA_CERT_PATH) &&
-            !LittleFS.exists(LEGACY_SERVICE_CA_CERT_PATH);
+            !fileExists(COMMIT_MARKER_PATH) &&
+            !fileExists(LEGACY_META_PATH) &&
+            !fileExists(LEGACY_CLIENT_CERT_PATH) &&
+            !fileExists(LEGACY_PRIVATE_KEY_PATH) &&
+            !fileExists(LEGACY_CA_CERT_PATH) &&
+            !fileExists(LEGACY_SERVICE_CA_CERT_PATH);
         unmountFS();
         return cleared;
 #endif
@@ -555,13 +422,13 @@ namespace FirmnginIdentity
         return load(record);
     }
 
+#if defined(ARDUINO) && defined(FIRMNGIN_FACTORY_SERIAL) && (FIRMNGIN_FACTORY_SERIAL != 0)
     void pollSerialProvision()
     {
-#if defined(FIRMNGIN_FACTORY_SERIAL) && (FIRMNGIN_FACTORY_SERIAL != 0)
         while (Serial.available() > 0)
         {
             String line = Serial.readStringUntil('\n');
-            line.trim();
+            line = fng_trim(line);
             if (line.length() == 0)
                 continue;
 
@@ -571,10 +438,10 @@ namespace FirmnginIdentity
                 continue;
             }
 
-            if (line.startsWith("FNGIN_META "))
+            if (fng_startsWith(line, "FNGIN_META "))
             {
-                String metaLine = line.substring(String("FNGIN_META ").length());
-                if (metaLine.startsWith("device_id="))
+                String metaLine = fng_substring(line, static_cast<int>(String("FNGIN_META ").length()));
+                if (fng_startsWith(metaLine, "device_id="))
                 {
                     if (!mountFS())
                     {
@@ -594,21 +461,21 @@ namespace FirmnginIdentity
                 continue;
             }
 
-            if (line.startsWith("FNGIN_CERT "))
+            if (fng_startsWith(line, "FNGIN_CERT "))
             {
-                int kindStart = String("FNGIN_CERT ").length();
-                int space = line.indexOf(' ', kindStart);
+                int kindStart = static_cast<int>(String("FNGIN_CERT ").length());
+                int space = fng_indexOf(line, ' ', kindStart);
                 if (space < 0)
                     continue;
-                gPendingCertKind = line.substring(kindStart, space);
-                gPendingCertBody = line.substring(space + 1);
+                gPendingCertKind = fng_substring(line, kindStart, space);
+                gPendingCertBody = fng_substring(line, space + 1);
                 Serial.println("FNGIN:cert_part");
                 continue;
             }
 
             if (line == "FNGIN_CERT_END")
             {
-                gPendingCertBody.replace("\\n", "\n");
+                gPendingCertBody = fng_replace_all(gPendingCertBody, "\\n", "\n");
                 if (!mountFS())
                 {
                     Serial.println("FNGIN:provision_failed storage");
@@ -691,10 +558,18 @@ namespace FirmnginIdentity
                 unmountFS();
                 gMetaBuffer = "";
                 Serial.println("FNGIN:identity_saved");
-                delay(250);
-                ESP.restart();
+                fng_delay_ms(250);
+                fng_restart();
             }
         }
+    }
+#else
+    void pollSerialProvision()
+    {
+#if defined(FIRMNGIN_FACTORY_SERIAL) && (FIRMNGIN_FACTORY_SERIAL != 0)
+        // Factory serial provisioning is an Arduino-side flow (Serial-based).
+        // Pure IDF firmware provisions out-of-band; nothing to poll here.
 #endif
     }
+#endif
 }

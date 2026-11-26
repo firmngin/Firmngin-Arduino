@@ -1,5 +1,6 @@
 #include "firmngin.h"
 #include "queue_format.h"
+#include "fng_fs.h"
 
 void Firmngin::setQueueEnabled(bool enabled)
 {
@@ -40,32 +41,28 @@ void Firmngin::clearQueue()
     _queueTail = 0;
     _queueCount = 0;
     _writeQueueHeader(0, 0, 0);
-    if (_debug)
-    {
-        Serial.println(F("[firmngin] queue: cleared"));
-    }
+    _Debug("queue: cleared", true);
 }
 
 bool Firmngin::_initQueue()
 {
-#if defined(ESP32)
+#if defined(ESP_PLATFORM)
     if (_queueFileReady)
         return true;
 
-    if (!LittleFS.begin(true))
+    if (!fng_fs_mount())
     {
         _Debug("queue: LITTLEFS mount failed", true);
         return false;
     }
 
-    if (!LittleFS.exists(FIRMNGIN_QUEUE_FILE_NAME))
+    if (!fng_fs_file_exists(fng_fs_path(FIRMNGIN_QUEUE_FILE_NAME).c_str()))
     {
         _resetQueueFile();
         _queueFileReady = true;
         if (_debug)
         {
-            Serial.print(F("[firmngin] queue: created file, capacity="));
-            Serial.println(_queueCapacity);
+            _Debug(String("queue: created file, capacity=") + String(_queueCapacity), true);
         }
         return true;
     }
@@ -74,7 +71,7 @@ bool Firmngin::_initQueue()
     if (!_readQueueHeader(head, tail, count))
     {
         _Debug("queue: file corrupt, recreating", true);
-        LittleFS.remove(FIRMNGIN_QUEUE_FILE_NAME);
+        remove(fng_fs_path(FIRMNGIN_QUEUE_FILE_NAME).c_str());
         _resetQueueFile();
         _queueFileReady = true;
         return true;
@@ -87,10 +84,7 @@ bool Firmngin::_initQueue()
 
     if (_debug)
     {
-        Serial.print(F("[firmngin] queue: loaded, count="));
-        Serial.print(_queueCount);
-        Serial.print(F("/"));
-        Serial.println(_queueCapacity);
+        _Debug(String("queue: loaded, count=") + String(_queueCount) + "/" + String(_queueCapacity), true);
     }
     return true;
 #else
@@ -101,8 +95,8 @@ bool Firmngin::_initQueue()
 void Firmngin::_shutdownQueue()
 {
     _queueFileReady = false;
-#if defined(ESP32)
-    LittleFS.end();
+#if defined(ESP_PLATFORM)
+    fng_fs_unmount();
 #endif
 }
 
@@ -112,9 +106,9 @@ void Firmngin::_resetQueueFile()
     _queueTail = 0;
     _queueCount = 0;
 
-#if defined(ESP32)
-    File f = LittleFS.open(FIRMNGIN_QUEUE_FILE_NAME, "w");
-    if (!f)
+#if defined(ESP_PLATFORM)
+    FILE *f = fopen(fng_fs_path(FIRMNGIN_QUEUE_FILE_NAME).c_str(), "w");
+    if (f == nullptr)
         return;
 
     size_t fileSize = FIRMNGIN_QUEUE_HEADER_SIZE + (size_t)_queueCapacity * FIRMNGIN_QUEUE_RECORD_SIZE;
@@ -123,11 +117,11 @@ void Firmngin::_resetQueueFile()
     while (remaining > 0)
     {
         size_t chunk = remaining > sizeof(zero) ? sizeof(zero) : remaining;
-        if (f.write(zero, chunk) != chunk)
+        if (fwrite(zero, 1, chunk, f) != chunk)
             break;
         remaining -= chunk;
     }
-    f.close();
+    fclose(f);
 
     _writeQueueHeader(0, 0, 0);
 #endif
@@ -135,22 +129,17 @@ void Firmngin::_resetQueueFile()
 
 bool Firmngin::_readQueueHeader(uint16_t &head, uint16_t &tail, uint16_t &count)
 {
-#if defined(ESP32)
-    File f = LittleFS.open(FIRMNGIN_QUEUE_FILE_NAME, "r");
-    if (!f || f.size() < FIRMNGIN_QUEUE_HEADER_SIZE)
-    {
-        if (f)
-            f.close();
+#if defined(ESP_PLATFORM)
+    FILE *f = fopen(fng_fs_path(FIRMNGIN_QUEUE_FILE_NAME).c_str(), "r");
+    if (f == nullptr)
         return false;
-    }
-
+    bool ok = true;
     uint8_t hdr[FIRMNGIN_QUEUE_HEADER_SIZE];
-    if (f.readBytes((char *)hdr, FIRMNGIN_QUEUE_HEADER_SIZE) != FIRMNGIN_QUEUE_HEADER_SIZE)
-    {
-        f.close();
+    if (fread(hdr, 1, sizeof(hdr), f) != sizeof(hdr))
+        ok = false;
+    fclose(f);
+    if (!ok)
         return false;
-    }
-    f.close();
 
     return firmngin_queue_decode_header(hdr, FIRMNGIN_QUEUE_HEADER_SIZE, _queueCapacity, &head, &tail, &count);
 #else
@@ -160,25 +149,19 @@ bool Firmngin::_readQueueHeader(uint16_t &head, uint16_t &tail, uint16_t &count)
 
 bool Firmngin::_writeQueueHeader(uint16_t head, uint16_t tail, uint16_t count)
 {
-#if defined(ESP32)
-    File f = LittleFS.open(FIRMNGIN_QUEUE_FILE_NAME, "r+");
-    if (!f)
+#if defined(ESP_PLATFORM)
+    FILE *f = fopen(fng_fs_path(FIRMNGIN_QUEUE_FILE_NAME).c_str(), "r+");
+    if (f == nullptr)
         return false;
-    if (!f.seek(0))
-    {
-        f.close();
-        return false;
-    }
-
     uint8_t hdr[FIRMNGIN_QUEUE_HEADER_SIZE];
     if (!firmngin_queue_encode_header(hdr, sizeof(hdr), head, tail, count))
     {
-        f.close();
+        fclose(f);
         return false;
     }
 
-    size_t wrote = f.write(hdr, FIRMNGIN_QUEUE_HEADER_SIZE);
-    f.close();
+    const size_t wrote = fwrite(hdr, 1, FIRMNGIN_QUEUE_HEADER_SIZE, f);
+    fclose(f);
     return wrote == FIRMNGIN_QUEUE_HEADER_SIZE;
 #else
     return false;
@@ -187,7 +170,7 @@ bool Firmngin::_writeQueueHeader(uint16_t head, uint16_t tail, uint16_t count)
 
 bool Firmngin::_enqueueToQueue(const char *topic, const uint8_t *payload, size_t payloadLen, bool retained)
 {
-#if defined(ESP32)
+#if defined(ESP_PLATFORM)
     if (!_queueFileReady || topic == nullptr || payload == nullptr)
         return false;
 
@@ -195,31 +178,27 @@ bool Firmngin::_enqueueToQueue(const char *topic, const uint8_t *payload, size_t
     {
         _queueHead = (_queueHead + 1) % _queueCapacity;
         _queueCount--;
-        if (_debug)
-        {
-            Serial.println(F("[firmngin] queue: full, dropped oldest"));
-        }
+        _Debug("queue: full, dropped oldest", true);
     }
 
     uint8_t record[FIRMNGIN_QUEUE_RECORD_SIZE];
     if (!firmngin_queue_pack_record(record, sizeof(record), topic, payload, payloadLen, retained))
     {
-        if (_debug)
-            Serial.println(F("[firmngin] queue: pack failed"));
+        _Debug("queue: pack failed", true);
         return false;
     }
 
     size_t recordOffset = firmngin_queue_record_file_offset(_queueTail, FIRMNGIN_QUEUE_HEADER_SIZE, FIRMNGIN_QUEUE_RECORD_SIZE);
-    File f = LittleFS.open(FIRMNGIN_QUEUE_FILE_NAME, "r+");
-    if (!f)
+    FILE *f = fopen(fng_fs_path(FIRMNGIN_QUEUE_FILE_NAME).c_str(), "r+");
+    if (f == nullptr)
         return false;
-    if (!f.seek(recordOffset))
+    if (fseek(f, static_cast<long>(recordOffset), SEEK_SET) != 0)
     {
-        f.close();
+        fclose(f);
         return false;
     }
-    size_t wrote = f.write(record, FIRMNGIN_QUEUE_RECORD_SIZE);
-    f.close();
+    const size_t wrote = fwrite(record, 1, FIRMNGIN_QUEUE_RECORD_SIZE, f);
+    fclose(f);
     if (wrote != FIRMNGIN_QUEUE_RECORD_SIZE)
         return false;
 
@@ -234,27 +213,27 @@ bool Firmngin::_enqueueToQueue(const char *topic, const uint8_t *payload, size_t
 
 bool Firmngin::_peekQueueHead(String &topic, String &payload, bool &retained)
 {
-#if defined(ESP32)
+#if defined(ESP_PLATFORM)
     if (!_queueFileReady || _queueCount == 0)
         return false;
 
     size_t recordOffset = firmngin_queue_record_file_offset(_queueHead, FIRMNGIN_QUEUE_HEADER_SIZE, FIRMNGIN_QUEUE_RECORD_SIZE);
-    File f = LittleFS.open(FIRMNGIN_QUEUE_FILE_NAME, "r");
-    if (!f)
+    FILE *f = fopen(fng_fs_path(FIRMNGIN_QUEUE_FILE_NAME).c_str(), "r");
+    if (f == nullptr)
         return false;
-    if (!f.seek(recordOffset))
+    if (fseek(f, static_cast<long>(recordOffset), SEEK_SET) != 0)
     {
-        f.close();
+        fclose(f);
         return false;
     }
 
     uint8_t record[FIRMNGIN_QUEUE_RECORD_SIZE];
-    if (f.readBytes((char *)record, FIRMNGIN_QUEUE_RECORD_SIZE) != FIRMNGIN_QUEUE_RECORD_SIZE)
+    if (fread(record, 1, sizeof(record), f) != sizeof(record))
     {
-        f.close();
+        fclose(f);
         return false;
     }
-    f.close();
+    fclose(f);
 
     char topicBuf[FIRMNGIN_QUEUE_TOPIC_MAX + 1];
     char payloadBuf[FIRMNGIN_QUEUE_PAYLOAD_MAX + 1];
@@ -287,11 +266,11 @@ void Firmngin::_drainQueue()
         return;
     if (_queueCount == 0)
     {
-        _lastQueueDrainMs = millis();
+        _lastQueueDrainMs = fng_now_ms();
         return;
     }
 
-    unsigned long now = millis();
+    unsigned long now = fng_now_ms();
     if (_lastQueueDrainMs != 0 && (now - _lastQueueDrainMs) < FIRMNGIN_QUEUE_DRAIN_INTERVAL_MS)
         return;
     _lastQueueDrainMs = now;
@@ -323,9 +302,6 @@ void Firmngin::_drainQueue()
 
     if (_debug && (drained > 0 || failed > 0))
     {
-        Serial.print(F("[firmngin] queue: drained="));
-        Serial.print(drained);
-        Serial.print(F(", dropped_corrupt="));
-        Serial.println(failed);
+        _Debug(String("queue: drained=") + String(drained) + ", dropped_corrupt=" + String(failed), true);
     }
 }

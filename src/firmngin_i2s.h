@@ -1,14 +1,16 @@
 #ifndef FIRMNGIN_I2S_H
 #define FIRMNGIN_I2S_H
 
-#include <Arduino.h>
+#include "fng_compat.h"
 #include <stddef.h>
 #include <stdint.h>
 
-#if defined(ESP32)
-#if ESP_ARDUINO_VERSION_MAJOR >= 3
+#if defined(ESP_PLATFORM)
+#if !defined(ARDUINO) || (defined(ESP_ARDUINO_VERSION_MAJOR) && (ESP_ARDUINO_VERSION_MAJOR >= 3))
+// IDF 5.x std driver (also used by Arduino core 3.x).
 #include <driver/i2s_std.h>
 #else
+// Arduino core 2.0.x keeps the legacy IDF 4.4 driver.
 #include <driver/i2s.h>
 #endif
 #endif
@@ -88,8 +90,8 @@ private:
     int16_t _lastLeft = 0;
     int16_t _lastRight = 0;
 
-#if defined(ESP32)
-#if ESP_ARDUINO_VERSION_MAJOR >= 3
+#if defined(ESP_PLATFORM)
+#if !defined(ARDUINO) || (defined(ESP_ARDUINO_VERSION_MAJOR) && (ESP_ARDUINO_VERSION_MAJOR >= 3))
     i2s_chan_handle_t _tx = nullptr;
     i2s_chan_handle_t _rx = nullptr;
 #else

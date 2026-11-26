@@ -1,6 +1,10 @@
 #include "firmngin.h"
 
-#if defined(ESP32)
+#if defined(ARDUINO)
+#include <WiFi.h>
+#endif
+
+#if defined(ESP_PLATFORM)
 #include <esp_netif.h>
 #include <string.h>
 #include <stdlib.h>
@@ -22,6 +26,11 @@ struct MqttStartOpts
     const char *pass;
     const char *willTopic;
     const char *willMsg;
+    // willRetain keeps the user-supplied MQTT client's will retained as before.
+    // The platform client leaves this false: the broker replays a retained LWT to
+    // every new subscription (/d/+ /lwt), and firmnginbe re-subscribes on each
+    // connect, which bills one MQTT message per device per restart.
+    bool willRetain;
     bool tls;
     bool insecure;
     const char *ca;
@@ -44,7 +53,7 @@ static esp_mqtt_client_handle_t startMqtt(const MqttStartOpts &opt, void *arg)
     const bool verify = opt.tls && !opt.insecure && opt.ca != nullptr && opt.ca[0] != '\0';
     const bool clientAuth = opt.tls && opt.cert != nullptr && opt.key != nullptr && opt.cert[0] != '\0' && opt.key[0] != '\0';
 
-#if ESP_ARDUINO_VERSION_MAJOR >= 3
+#if !defined(ARDUINO) || (defined(ESP_ARDUINO_VERSION_MAJOR) && ESP_ARDUINO_VERSION_MAJOR >= 3)
     cfg.broker.address.hostname = opt.host;
     cfg.broker.address.port = opt.port;
     cfg.broker.address.transport = opt.tls ? MQTT_TRANSPORT_OVER_SSL : MQTT_TRANSPORT_OVER_TCP;
@@ -62,7 +71,7 @@ static esp_mqtt_client_handle_t startMqtt(const MqttStartOpts &opt, void *arg)
     cfg.session.last_will.topic = opt.willTopic;
     cfg.session.last_will.msg = opt.willMsg;
     cfg.session.last_will.qos = 1;
-    cfg.session.last_will.retain = 1;
+    cfg.session.last_will.retain = opt.willRetain ? 1 : 0;
     cfg.session.disable_clean_session = true;
     cfg.session.keepalive = opt.keepalive;
     cfg.buffer.size = opt.bufferSize;
@@ -79,7 +88,7 @@ static esp_mqtt_client_handle_t startMqtt(const MqttStartOpts &opt, void *arg)
     cfg.lwt_topic = opt.willTopic;
     cfg.lwt_msg = opt.willMsg;
     cfg.lwt_qos = 1;
-    cfg.lwt_retain = 1;
+    cfg.lwt_retain = opt.willRetain ? 1 : 0;
     cfg.disable_clean_session = 1;
     cfg.keepalive = opt.keepalive;
     cfg.buffer_size = opt.bufferSize;
@@ -109,8 +118,10 @@ static esp_mqtt_client_handle_t startMqtt(const MqttStartOpts &opt, void *arg)
 
 bool Firmngin::_networkReady() const
 {
+#if defined(ARDUINO)
     if (WiFi.status() == WL_CONNECTED)
         return true;
+#endif
     esp_netif_t *eth = esp_netif_get_handle_from_ifkey("ETH_DEF");
     if (eth == nullptr)
         return false;
@@ -167,7 +178,7 @@ void Firmngin::_mqttPost(uint8_t which, const char *topic, const uint8_t *data, 
     {
         _msgDroppedCount = _msgDroppedCount + 1;
         if (_debug)
-            Serial.printf("[FNG-E%d] Messages queue alloc failed, dropped message to %s\n", FMSG_ERR_BUFFER_OVERFLOW, topic);
+            Console.printf("[FNG-E%d] Messages queue alloc failed, dropped message to %s\n", FMSG_ERR_BUFFER_OVERFLOW, topic);
         return;
     }
     size_t topicLen = strlen(topic);
@@ -180,7 +191,7 @@ void Firmngin::_mqttPost(uint8_t which, const char *topic, const uint8_t *data, 
         free(msg);
         _msgDroppedCount = _msgDroppedCount + 1;
         if (_debug)
-            Serial.printf("[FNG-E%d] Messages queue alloc failed, dropped message to %s\n", FMSG_ERR_BUFFER_OVERFLOW, topic);
+            Console.printf("[FNG-E%d] Messages queue alloc failed, dropped message to %s\n", FMSG_ERR_BUFFER_OVERFLOW, topic);
         return;
     }
     memcpy(msg->topic, topic, topicLen + 1);
@@ -195,7 +206,7 @@ void Firmngin::_mqttPost(uint8_t which, const char *topic, const uint8_t *data, 
         free(msg);
         _msgDroppedCount = _msgDroppedCount + 1;
         if (_debug)
-            Serial.printf("[FNG-E%d] Messages queue full, dropped message to %s (total dropped: %u)\n", 
+            Console.printf("[FNG-E%d] Messages queue full, dropped message to %s (total dropped: %u)\n",
                 FMSG_ERR_QUEUE_FULL, topic, static_cast<unsigned int>(_msgDroppedCount));
     }
 }
@@ -215,8 +226,18 @@ void Firmngin::_subscribePlatform()
     esp_mqtt_client_subscribe(_mqtt, topic, 1);
     snprintf(topic, sizeof(topic), "/d/%s/rs/+", _deviceId);
     esp_mqtt_client_subscribe(_mqtt, topic, 1);
+    if (_gatewayEnabled) {
+        snprintf(topic, sizeof(topic), "/d/%s/gw/routes", _deviceId);
+        esp_mqtt_client_subscribe(_mqtt, topic, 0);
+        snprintf(topic, sizeof(topic), "/d/%s/gw/command", _deviceId);
+        esp_mqtt_client_subscribe(_mqtt, topic, 0);
+    }
     const char *online = "1";
-    esp_mqtt_client_enqueue(_mqtt, _mqttWillTopic.c_str(), online, 1, 1, 1, true);
+    // retain = 0 on purpose: a retained LWT is replayed to every new subscriber,
+    // and firmnginbe subscribes /d/+ /lwt again on each connect (clean session).
+    // Each replay is a delivered message billed to the device owner. Availability
+    // is owned by the broker's client.connected/disconnected webhooks instead.
+    esp_mqtt_client_enqueue(_mqtt, _mqttWillTopic.c_str(), online, 1, 1, 0, true);
     _mqttHelloPending = true;
 }
 
@@ -230,7 +251,7 @@ void Firmngin::_userMqttResubscribe()
         if (xSemaphoreTake(_mqttLock, pdMS_TO_TICKS(5000)) != pdTRUE)
         {
             if (_debug)
-                Serial.printf("[FNG-E%d] Device busy: incoming messages not restored after reconnect (timeout)\n", FMSG_ERR_MUTEX_TIMEOUT);
+                Console.printf("[FNG-E%d] Device busy: incoming messages not restored after reconnect (timeout)\n", FMSG_ERR_MUTEX_TIMEOUT);
             return;
         }
     }
@@ -255,7 +276,7 @@ void Firmngin::_onMqttEvent(esp_mqtt_event_handle_t event)
             _msgUserReconnects = _msgUserReconnects + 1;
             _userMqttResubscribe();
             if (_debug)
-                Serial.println("[FNG] User server connected");
+                Console.println("[FNG] User server connected");
         }
         else
         {
@@ -272,16 +293,17 @@ void Firmngin::_onMqttEvent(esp_mqtt_event_handle_t event)
         {
             _userMqttUp = false;
             if (_debug)
-                Serial.println("[FNG] User server disconnected");
+                Console.println("[FNG] User server disconnected");
         }
         else
         {
             _mqttUp = false;
-            _msgLastReconnectMs = millis();
+            _gatewaySynced = false;
+            _msgLastReconnectMs = fng_now_ms();
             if (_msgReconnectBackoff < _msgReconnectBackoffMax)
-                _msgReconnectBackoff = min(_msgReconnectBackoff * 2, _msgReconnectBackoffMax);
+                _msgReconnectBackoff = (_msgReconnectBackoff * 2 > _msgReconnectBackoffMax) ? _msgReconnectBackoffMax : _msgReconnectBackoff * 2;
             if (_debug)
-                Serial.printf("[FNG] Platform server disconnected (backoff: %lus)\n", _msgReconnectBackoff / 1000);
+                Console.printf("[FNG] Platform server disconnected (backoff: %lus)\n", _msgReconnectBackoff / 1000);
         }
         return;
     }
@@ -290,7 +312,7 @@ void Firmngin::_onMqttEvent(esp_mqtt_event_handle_t event)
         if (event->error_handle == nullptr)
         {
             if (_debug)
-                Serial.printf("[FNG-E%d] Connection error (unknown)\n", FMSG_ERR_UNKNOWN);
+                Console.printf("[FNG-E%d] Connection error (unknown)\n", FMSG_ERR_UNKNOWN);
             return;
         }
         
@@ -300,11 +322,11 @@ void Firmngin::_onMqttEvent(esp_mqtt_event_handle_t event)
         {
         case MQTT_ERROR_TYPE_TCP_TRANSPORT:
             if (_debug)
-                Serial.printf("[FNG-E%d] %s: TCP transport error\n", FMSG_ERR_TCP_CONNECT, clientType);
+                Console.printf("[FNG-E%d] %s: TCP transport error\n", FMSG_ERR_TCP_CONNECT, clientType);
             break;
         case MQTT_ERROR_TYPE_CONNECTION_REFUSED:
             if (_debug)
-                Serial.printf("[FNG-E%d] %s: Connection refused (code: %d)\n", 
+                Console.printf("[FNG-E%d] %s: Connection refused (code: %d)\n",
                     FMSG_ERR_CONN_REFUSED, clientType, 
                     static_cast<int>(event->error_handle->connect_return_code));
             break;
@@ -312,21 +334,21 @@ void Firmngin::_onMqttEvent(esp_mqtt_event_handle_t event)
             if (event->error_handle->esp_tls_last_esp_err != 0)
             {
                 if (_debug)
-                    Serial.printf("[FNG-E%d] %s: TLS error (0x%x)\n", 
+                    Console.printf("[FNG-E%d] %s: TLS error (0x%x)\n",
                         FMSG_ERR_TLS_HANDSHAKE, clientType,
                         event->error_handle->esp_tls_last_esp_err);
             }
             else if (event->error_handle->esp_tls_stack_err != 0)
             {
                 if (_debug)
-                    Serial.printf("[FNG-E%d] %s: TLS cert verify failed (0x%x)\n", 
+                    Console.printf("[FNG-E%d] %s: TLS cert verify failed (0x%x)\n",
                         FMSG_ERR_TLS_CERT_VERIFY, clientType,
                         event->error_handle->esp_tls_stack_err);
             }
             else
             {
                 if (_debug)
-                    Serial.printf("[FNG-E%d] %s: Connection error\n", FMSG_ERR_UNKNOWN, clientType);
+                    Console.printf("[FNG-E%d] %s: Connection error\n", FMSG_ERR_UNKNOWN, clientType);
             }
             break;
         }
@@ -345,12 +367,16 @@ void Firmngin::_onMqttEvent(esp_mqtt_event_handle_t event)
         _mqttRxReset(which);
         if (event->topic == nullptr || event->topic_len <= 0 || total < 0)
             return;
-        if (total > 4096)
+        char routeTopic[128];
+        snprintf(routeTopic, sizeof(routeTopic), "/d/%s/gw/routes", _deviceId);
+        const bool gatewayRoutes = !user && _gatewayEnabled && static_cast<size_t>(event->topic_len) == strlen(routeTopic) && memcmp(event->topic, routeTopic, event->topic_len) == 0;
+        const int payloadLimit = gatewayRoutes ? 65536 : 4096;
+        if (total > payloadLimit)
         {
             _msgDroppedCount = _msgDroppedCount + 1;
             if (_debug)
-                Serial.printf("[FNG-E%d] Message too large: %d bytes (max 4096), dropped\n", 
-                    FMSG_ERR_MESSAGE_TOO_LARGE, total);
+                Console.printf("[FNG-E%d] Message too large: %d bytes (max %d), dropped\n",
+                    FMSG_ERR_MESSAGE_TOO_LARGE, total, payloadLimit);
             return;
         }
         _rxTopic[which] = static_cast<char *>(malloc(static_cast<size_t>(event->topic_len) + 1));
@@ -398,7 +424,7 @@ void Firmngin::_drainMqttInbox()
             if (msg != nullptr)
             {
                 if (msg->which == 0 && msg->topic != nullptr)
-                    mqttCallback(msg->topic, reinterpret_cast<byte *>(msg->data), msg->len);
+                    mqttCallback(msg->topic, msg->data, msg->len);
                 else if (msg->which == 1 && _userMqttCallback && msg->topic != nullptr)
                     _userMqttCallback(msg->topic, msg->data, msg->len);
                 free(msg->topic);
@@ -416,9 +442,10 @@ void Firmngin::_mqttAfterConnect()
         return;
     _mqttHelloPending = false;
     if (_debug)
-        Serial.println("Successfully connected");
+        Console.println("Successfully connected");
     syncFirmwareInfo();
     requestInit();
+    _gatewayConnected();
     if (_queueEnabled && _queueFileReady && _queueCount > 0)
     {
         _lastQueueDrainMs = 0;
@@ -470,7 +497,7 @@ bool Firmngin::connectServer()
 {
     if (!_securityReady)
     {
-        Serial.println("ERROR: secure initialization is incomplete; server connection blocked");
+        Console.println("ERROR: secure initialization is incomplete; server connection blocked");
         return false;
     }
     if (_mqtt != nullptr)
@@ -495,21 +522,21 @@ bool Firmngin::connectServer()
     opt.keepalive = 15;
     opt.bufferSize = 2048;
 
-    Serial.println("Connecting to server...");
+    Console.println("Connecting to server...");
     _mqtt = startMqtt(opt, this);
     if (_mqtt == nullptr)
     {
-        Serial.println("Failed to start server client");
+        Console.println("Failed to start server client");
         return false;
     }
 
-    unsigned long start = millis();
-    while (millis() - start < 10000)
+    unsigned long start = fng_now_ms();
+    while (fng_now_ms() - start < 10000)
     {
         _drainMqttInbox();
         if (_mqttUp && !_mqttHelloPending)
             return true;
-        delay(20);
+        fng_delay_ms(20);
     }
     _drainMqttInbox();
     if (!_mqttUp)
@@ -532,7 +559,7 @@ void Firmngin::mqttClientSetInsecure(bool insecure)
         return;
     _userMqttInsecure = insecure;
     if (insecure)
-        Serial.println("WARNING: user server client TLS verification explicitly disabled");
+        Console.println("WARNING: user server client TLS verification explicitly disabled");
 }
 
 bool Firmngin::mqttClientBegin(const char *host, uint16_t port,
@@ -559,7 +586,7 @@ bool Firmngin::mqttClientBegin(const char *host, uint16_t port,
         _userMqttBufferSize = 128;
     if (tls && _userMqttCa.length() == 0 && !_userMqttInsecure)
     {
-        Serial.println("ERROR: user server TLS needs a CA, or mqttClientSetInsecure(true)");
+        Console.println("ERROR: user server TLS needs a CA, or mqttClientSetInsecure(true)");
         return false;
     }
     _ensureMqttInbox();
@@ -572,6 +599,7 @@ bool Firmngin::mqttClientBegin(const char *host, uint16_t port,
     opt.pass = _userMqttPass.length() > 0 ? _userMqttPass.c_str() : nullptr;
     opt.willTopic = _userMqttWillTopic.length() > 0 ? _userMqttWillTopic.c_str() : nullptr;
     opt.willMsg = _userMqttWillMsg.c_str();
+    opt.willRetain = true;
     opt.tls = _userMqttTls;
     opt.insecure = _userMqttCa.length() == 0 && _userMqttInsecure;
     opt.ca = _userMqttCa.length() > 0 ? _userMqttCa.c_str() : nullptr;
@@ -595,7 +623,7 @@ bool Firmngin::mqttClientSubscribe(const char *topic, int qos)
         if (xSemaphoreTake(_mqttLock, pdMS_TO_TICKS(5000)) != pdTRUE)
         {
             if (_debug)
-                Serial.printf("[FNG-E%d] Device busy: incoming messages not set up (timeout)\n", FMSG_ERR_MUTEX_TIMEOUT);
+                Console.printf("[FNG-E%d] Device busy: incoming messages not set up (timeout)\n", FMSG_ERR_MUTEX_TIMEOUT);
             return false;
         }
     }

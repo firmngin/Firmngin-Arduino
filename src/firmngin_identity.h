@@ -1,7 +1,7 @@
 #ifndef FIRMNGIN_IDENTITY_H
 #define FIRMNGIN_IDENTITY_H
 
-#include <Arduino.h>
+#include "fng_compat.h"
 
 struct FirmnginIdentityRecord
 {

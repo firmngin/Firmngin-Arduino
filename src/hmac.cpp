@@ -2,13 +2,13 @@
 
 #include <string.h>
 
-#if defined(ESP32)
+#if defined(ESP_PLATFORM)
 #include <mbedtls/md.h>
 #endif
 
 String firmngin_hmac_sha256_hex(const char *key, const char *message)
 {
-#if defined(ESP32)
+#if defined(ESP_PLATFORM)
     uint8_t hmac_result[32];
     mbedtls_md_context_t ctx;
     mbedtls_md_init(&ctx);
@@ -20,7 +20,7 @@ String firmngin_hmac_sha256_hex(const char *key, const char *message)
 
     char hex[65];
     for (int i = 0; i < 32; i++)
-        sprintf(hex + (i * 2), "%02x", hmac_result[i]);
+        snprintf(hex + (i * 2), 3, "%02x", hmac_result[i]);
     hex[64] = '\0';
     return String(hex);
 

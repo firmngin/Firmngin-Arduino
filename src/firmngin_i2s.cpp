@@ -21,8 +21,8 @@ FirmnginI2s::FirmnginI2s(FirmnginI2s &&other) noexcept
       _lastLeft(other._lastLeft),
       _lastRight(other._lastRight)
 {
-#if defined(ESP32)
-#if ESP_ARDUINO_VERSION_MAJOR >= 3
+#if defined(ESP_PLATFORM)
+#if !defined(ARDUINO) || (defined(ESP_ARDUINO_VERSION_MAJOR) && ESP_ARDUINO_VERSION_MAJOR >= 3)
     _tx = other._tx;
     _rx = other._rx;
     other._tx = nullptr;
@@ -55,8 +55,8 @@ FirmnginI2s &FirmnginI2s::operator=(FirmnginI2s &&other) noexcept
     _ready = other._ready;
     _lastLeft = other._lastLeft;
     _lastRight = other._lastRight;
-#if defined(ESP32)
-#if ESP_ARDUINO_VERSION_MAJOR >= 3
+#if defined(ESP_PLATFORM)
+#if !defined(ARDUINO) || (defined(ESP_ARDUINO_VERSION_MAJOR) && ESP_ARDUINO_VERSION_MAJOR >= 3)
     _tx = other._tx;
     _rx = other._rx;
     other._tx = nullptr;
@@ -126,8 +126,8 @@ bool FirmnginI2s::_isTx() const
 
 void FirmnginI2s::_release()
 {
-#if defined(ESP32)
-#if ESP_ARDUINO_VERSION_MAJOR >= 3
+#if defined(ESP_PLATFORM)
+#if !defined(ARDUINO) || (defined(ESP_ARDUINO_VERSION_MAJOR) && ESP_ARDUINO_VERSION_MAJOR >= 3)
     if (_tx != nullptr)
     {
         i2s_channel_disable(_tx);
@@ -162,13 +162,13 @@ FirmnginI2s &FirmnginI2s::begin()
 {
     _release();
 
-#if !defined(ESP32)
+#if !defined(ESP_PLATFORM)
     return *this;
 #else
     if (_bclk < 0 || _ws < 0 || _data < 0)
         return *this;
 
-#if ESP_ARDUINO_VERSION_MAJOR >= 3
+#if !defined(ARDUINO) || (defined(ESP_ARDUINO_VERSION_MAJOR) && ESP_ARDUINO_VERSION_MAJOR >= 3)
     const bool tx = _isTx();
     i2s_chan_config_t chan = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_AUTO, I2S_ROLE_MASTER);
     chan.dma_desc_num = _dmaDesc;
@@ -248,9 +248,9 @@ bool FirmnginI2s::write(const uint8_t *data, size_t len)
 {
     if (!_ready || data == nullptr || len == 0 || !_isTx())
         return false;
-#if defined(ESP32)
+#if defined(ESP_PLATFORM)
     bool ok = false;
-#if ESP_ARDUINO_VERSION_MAJOR >= 3
+#if !defined(ARDUINO) || (defined(ESP_ARDUINO_VERSION_MAJOR) && ESP_ARDUINO_VERSION_MAJOR >= 3)
     size_t written = 0;
     ok = i2s_channel_write(_tx, data, len, &written, portMAX_DELAY) == ESP_OK && written == len;
 #else
@@ -277,7 +277,7 @@ bool FirmnginI2s::flush()
 {
     if (!_ready || !_isTx())
         return false;
-#if defined(ESP32)
+#if defined(ESP_PLATFORM)
     // Hard disable/enable cuts a sample at an arbitrary point and is heard as a click.
     // Let the small hardware DMA tail finish, then land on zero over one 20 ms frame.
     static uint8_t fade[320 * 2 * 2];
@@ -303,8 +303,8 @@ size_t FirmnginI2s::read(uint8_t *data, size_t len)
 {
     if (!_ready || data == nullptr || len == 0 || _isTx())
         return 0;
-#if defined(ESP32)
-#if ESP_ARDUINO_VERSION_MAJOR >= 3
+#if defined(ESP_PLATFORM)
+#if !defined(ARDUINO) || (defined(ESP_ARDUINO_VERSION_MAJOR) && ESP_ARDUINO_VERSION_MAJOR >= 3)
     size_t readBytes = 0;
     if (i2s_channel_read(_rx, data, len, &readBytes, portMAX_DELAY) != ESP_OK)
         return 0;

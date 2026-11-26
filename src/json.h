@@ -1,9 +1,10 @@
 #ifndef FIRMNGIN_JSON_H
 #define FIRMNGIN_JSON_H
 
-#include <Arduino.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <string.h>
+#include <ctype.h>
 
 namespace firmngin_json {
 

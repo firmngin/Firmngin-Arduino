@@ -1,15 +1,14 @@
 #include "crypto.h"
 
-#include <Arduino.h>
-
-#if defined(ESP32)
+#if defined(ESP_PLATFORM)
 #include <esp_system.h>
+#include <esp_random.h> // IDF 5.x home of esp_fill_random; present in 4.4 too
 #include <mbedtls/gcm.h>
 #endif
 
 void firmngin_fill_e2ee_nonce(uint8_t *iv, size_t len)
 {
-#if defined(ESP32)
+#if defined(ESP_PLATFORM)
     esp_fill_random(iv, len);
 #else
     for (size_t i = 0; i < len; i++)
@@ -27,7 +26,7 @@ bool firmngin_encrypt_e2ee(const uint8_t *plaintext, size_t plain_len, const uin
     uint8_t *tag = packet + 12 + plain_len;
     firmngin_fill_e2ee_nonce(iv, 12);
 
-#if defined(ESP32)
+#if defined(ESP_PLATFORM)
     if (key_len != 16 && key_len != 32)
         return false;
 
@@ -73,7 +72,7 @@ bool firmngin_decrypt_e2ee(const uint8_t *packet, size_t packet_len, const uint8
     const uint8_t *ciphertext = packet + 12;
     const uint8_t *tag = packet + 12 + cipher_len;
 
-#if defined(ESP32)
+#if defined(ESP_PLATFORM)
     if (key_len == 16)
     {
         mbedtls_gcm_context gcm;

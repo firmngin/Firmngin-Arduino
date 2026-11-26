@@ -4,7 +4,8 @@
 
 OtaRollbackResult firmngin_ota_rollback_decide(const char *runningVersion,
                                                const OtaRollbackState &state,
-                                               unsigned long uptimeMs)
+                                               unsigned long uptimeMs,
+                                               int candidatePartition)
 {
     OtaRollbackResult r;
     r.action = OTA_RB_NOOP;
@@ -18,7 +19,9 @@ OtaRollbackResult firmngin_ota_rollback_decide(const char *runningVersion,
     const char *rv = (runningVersion != nullptr) ? runningVersion : "";
     const char *lv = (state.lastOkVersion != nullptr) ? state.lastOkVersion : "";
 
-    if (strcmp(rv, lv) == 0)
+    // Partition identity distinguishes reinstallation of the same version from
+    // rollback. Older NVS records retain the conservative version fallback.
+    if (candidatePartition == 0 || (candidatePartition < 0 && strcmp(rv, lv) == 0))
     {
         // The previously-good app is back while an OTA was pending: a rollback
         // happened (bootloader reverted after the new app failed to verify).
