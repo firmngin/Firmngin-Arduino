@@ -1616,6 +1616,35 @@ bool ActiveSession::endSession()
 }
 
 // Inits constructor: parses init JSON automatically
+// The init payload announces every GPIO entity as {p: <pin>, v: <value>, t: <type>}.
+// The wire key is the pin number (Entity(int)), so remember those values here:
+// `entity(pin)` then reports the server's state right after a reconnect instead of
+// staying empty until the first command or the first report from the sketch.
+static void collectInitEntityValues(const String &entitiesJson, std::map<String, String> &out)
+{
+    const char *p = entitiesJson.c_str();
+    const char *end = p + entitiesJson.length();
+    while (p < end)
+    {
+        const char *objStart = strchr(p, '{');
+        if (objStart == nullptr || objStart >= end)
+            break;
+        const char *objEnd = strchr(objStart, '}');
+        if (objEnd == nullptr || objEnd >= end)
+            break;
+        firmngin_json::Parser entry(objStart, static_cast<size_t>(objEnd - objStart) + 1);
+        if (entry.has("p") && entry.has("v"))
+        {
+            const int pin = entry.getInt("p", -1);
+            char value[64] = {0};
+            entry.getString("v", value, sizeof(value));
+            if (pin >= 0)
+                out[String(pin)] = String(value);
+        }
+        p = objEnd + 1;
+    }
+}
+
 static String findInitAudioStreamUrl(const String &entitiesJson)
 {
     // Every audio entity carries the device-wide stream URL in its value instead
@@ -2438,7 +2467,7 @@ void Firmngin::mqttCallback(char *path, uint8_t *payload, unsigned int length)
         }
     }
 
-    if (stateType == "init" && (_initCallback || !_initCallbacks.empty()))
+    if (stateType == "init")
     {
         Inits i(payloadStr);
         if (i.isValid())
@@ -2450,6 +2479,9 @@ void Firmngin::mqttCallback(char *path, uint8_t *payload, unsigned int length)
             {
                 setCurrentOrder(i.activeOrderId());
             }
+            // Remember what the server announced before the sketch applies it: that
+            // is the reconnect baseline `entity()` and reportAllEntities() use.
+            collectInitEntityValues(i.entities(), _localEntityValues);
             if (_initCallback)
             {
                 _initCallback(i);
@@ -2460,20 +2492,6 @@ void Firmngin::mqttCallback(char *path, uint8_t *payload, unsigned int length)
                 {
                     callback(i);
                 }
-            }
-        }
-    }
-    else if (stateType == "init")
-    {
-        Inits i(payloadStr);
-        if (i.isValid())
-        {
-            _deviceInitReceived = true;
-            _applyAudioStreamUrl(i.audioStreamUrl());
-            setMerchantStatus(i.merchantStatus());
-            if (i.isOnActiveService() && i.activeOrderId().length() > 0)
-            {
-                setCurrentOrder(i.activeOrderId());
             }
         }
     }
@@ -2761,6 +2779,25 @@ bool Firmngin::updateEntities(const char *jsonPayload)
     if (!b.add("t", getTimestampMillis()) || !b.addRaw("items", jsonPayload))
         return false;
     return publishPayload(_topicUpdateEntities.c_str(), b.build());
+}
+
+bool Firmngin::reportAllEntities()
+{
+    if (_topicUpdateEntities.length() == 0 || _localEntityValues.empty())
+        return false;
+
+    // After a reboot the server and the apps still hold the pre-crash value, and
+    // init only tells the device what it believes. Reporting everything this
+    // sketch actually applied is what makes the two agree again.
+    char buffer[FIRMNGIN_BATCH_BUFFER_SIZE];
+    firmngin_json::ArrayBuilder b(buffer, sizeof(buffer));
+    b.reset();
+    for (const auto &entry : _localEntityValues)
+    {
+        if (!b.add(entry.first.c_str(), entry.second.c_str()))
+            return false; // never publish a truncated array
+    }
+    return updateEntities(b.build());
 }
 
 EntityValue Firmngin::entity(const char *key)

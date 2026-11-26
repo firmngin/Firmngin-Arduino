@@ -1100,6 +1100,11 @@ public:
     bool pushEntity(const Entity &entity, double value, int decimals);
     bool pushEntity(const Entity &entity, bool value);
     bool updateEntities(const char *jsonPayload);
+    // Publish every value this device knows about (the init announce plus anything
+    // pushed since) in one batch. Call it after applying init at boot so the server
+    // and the apps stop showing the pre-crash value. False when the batch could not
+    // be sent (no topic yet, nothing known, or the payload would be truncated).
+    bool reportAllEntities();
     EntityValue entity(const char *key);
     EntityValue entity(const Entity &entity);
     bool endSession();
